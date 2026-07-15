@@ -219,7 +219,7 @@ describe("SchemaRepresentation2 built-in Date checks", () => {
     })
     throws(
       () => SchemaRepresentation2.toJson(SchemaRepresentation2.fromAST(Schema.Any.check(check).ast)),
-      `Invalid representation payload for effect/schema/isGreaterThanDate\n  at ["representation"]["checks"][0]["annotations"]["representation"]["payload"]`
+      `Expected JSON value, got {"exclusiveMinimum":NaN}\n  at ["representation"]["checks"][0]["annotations"]["representation"]["payload"]`
     )
   })
 })

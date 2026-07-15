@@ -203,7 +203,7 @@ describe("SchemaRepresentation2 JSON revival", () => {
     )
   })
 
-  it("validates payloads, reviver kinds and callback results", () => {
+  it("validates payloads and reviver kinds and preserves callback exceptions", () => {
     const invalidPayload = filterJson() as any
     invalidPayload.representation.checks[0].annotations.representation.payload = { minimum: "two" }
     assert.strictEqual(
@@ -222,15 +222,6 @@ describe("SchemaRepresentation2 JSON revival", () => {
     assert.strictEqual(
       errorFrom(() => SchemaRepresentation2.fromJson(filterJson(), { revivers: [wrongKind] })).message,
       `Invalid reviver kind for ${filterId}\n  at ["representation"]["checks"][0]["annotations"]["representation"]`
-    )
-
-    const invalidResult: SchemaRepresentation2.FilterReviver<{ readonly minimum: number }> = {
-      ...minLengthReviver,
-      revive: () => Schema.String.ast as any
-    }
-    assert.strictEqual(
-      errorFrom(() => SchemaRepresentation2.fromJson(filterJson(), { revivers: [invalidResult] })).message,
-      `Invalid reviver result for ${filterId}\n  at ["representation"]["checks"][0]["annotations"]["representation"]`
     )
 
     const cause = new Error("boom")
@@ -408,7 +399,7 @@ describe("SchemaRepresentation2 JSON revival", () => {
     assert.isDefined(lowered.references.Alias)
   })
 
-  it("reports invalid references and distinguishes payload strict-JSON failures", () => {
+  it("reports invalid references and reuses persisted codec failures", () => {
     assert.strictEqual(
       errorFrom(() =>
         SchemaRepresentation2.fromJson(
@@ -420,7 +411,7 @@ describe("SchemaRepresentation2 JSON revival", () => {
     )
 
     const invalidPayload = filterJson() as any
-    invalidPayload.representation.checks[0].annotations.representation.payload = { value: -0 }
+    invalidPayload.representation.checks[0].annotations.representation.payload = new Array(1)
     const payloadCodecResult = Schema.decodeUnknownResult(SchemaRepresentation2.PersistedDocumentFromJson)(
       invalidPayload
     )
@@ -433,7 +424,7 @@ describe("SchemaRepresentation2 JSON revival", () => {
     }
 
     const invalidDocument: any = {
-      representation: { _tag: "String", annotations: { value: -0 }, checks: [] },
+      representation: { _tag: "String", annotations: { value: new Array(1) }, checks: [] },
       references: {}
     }
     const documentCodecResult = Schema.decodeUnknownResult(SchemaRepresentation2.PersistedDocumentFromJson)(

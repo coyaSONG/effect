@@ -56,7 +56,7 @@ export interface LiveAnnotations extends RepresentationAnnotationSlots {
 }
 
 /**
- * Strict JSON annotations retained on ordinary structural positions.
+ * JSON annotations retained on ordinary structural positions.
  *
  * @category models
  * @since 4.0.0
@@ -66,7 +66,7 @@ export interface PersistedOrdinaryAnnotations {
 }
 
 /**
- * Strict JSON annotations retained on declarations and opaque checks.
+ * JSON annotations retained on declarations and opaque checks.
  *
  * @category models
  * @since 4.0.0
@@ -671,7 +671,7 @@ export interface FromJsonOptions {
  *
  * **Gotchas**
  *
- * `onEnter` must return a plain strict-JSON object. Invalid results throw an `Error`; exceptions raised by the callback pass through unchanged.
+ * `onEnter` must return a JSON Schema object. Its result is used directly, and exceptions raised by the callback pass through unchanged.
  *
  * @category models
  * @since 4.0.0
@@ -762,7 +762,7 @@ export function fromASTs(
  *
  * **Gotchas**
  *
- * Check compilation is best-effort, but opaque declarations require a `toJsonSchema` callback. Invalid callback results throw an `Error`; exceptions raised by the callback pass through unchanged.
+ * Check compilation is best-effort, but opaque declarations require a `toJsonSchema` callback. Callback results are used directly, and exceptions raised by the callback pass through unchanged.
  *
  * @see {@link toJsonSchemaMultiDocument} for multiple roots sharing definitions
  *
@@ -808,7 +808,7 @@ export function toJsonSchemaMultiDocument(
  *
  * **Gotchas**
  *
- * Opaque declarations and leaf checks require generation callbacks. Invalid callback results throw an `Error`; exceptions raised by a callback pass through unchanged.
+ * Opaque declarations and leaf checks require generation callbacks. Callback results are used directly, and exceptions raised by a callback pass through unchanged.
  *
  * @category transforming
  * @since 4.0.0
@@ -838,7 +838,7 @@ export function toCodeDocumentFromSchemaMultiDocument(document: SchemaMultiDocum
 }
 
 /**
- * Schema for persisted single-root representation documents encoded as strict JSON.
+ * Schema for persisted single-root representation documents encoded as JSON.
  *
  * **When to use**
  *
@@ -858,7 +858,7 @@ export const PersistedDocumentFromJson: Schema.Codec<Document<PersistedAnnotatio
   InternalRepresentationSchema.getPersistedDocumentFromJson()
 
 /**
- * Schema for persisted multi-root representation documents encoded as strict JSON.
+ * Schema for persisted multi-root representation documents encoded as JSON.
  *
  * **When to use**
  *
@@ -878,7 +878,7 @@ export const PersistedMultiDocumentFromJson: Schema.Codec<MultiDocument<Persiste
   InternalRepresentationSchema.getPersistedMultiDocumentFromJson()
 
 /**
- * Projects a live single-root representation document and encodes it as strict JSON.
+ * Projects a live single-root representation document and encodes it as JSON.
  *
  * **When to use**
  *
@@ -886,7 +886,7 @@ export const PersistedMultiDocumentFromJson: Schema.Codec<MultiDocument<Persiste
  *
  * **Gotchas**
  *
- * Generic annotations that are not strict JSON are omitted. Invalid persistence identities and unsupported structural values throw an `Error` containing their representation path.
+ * Generic annotations that are not JSON are omitted. Invalid persistence identities and unsupported structural values throw an `Error` containing their representation path.
  *
  * @see {@link fromAST} for constructing the live document
  * @see {@link PersistedDocumentFromJson} for direct access to the persisted codec
@@ -900,7 +900,7 @@ export function toJson(document: Document<LiveAnnotations>): Schema.Json {
 }
 
 /**
- * Projects a live multi-root representation document and encodes it as strict JSON.
+ * Projects a live multi-root representation document and encodes it as JSON.
  *
  * **When to use**
  *
@@ -930,7 +930,7 @@ export function toJsonMultiDocument(document: MultiDocument<LiveAnnotations>): S
  *
  * **Gotchas**
  *
- * `options` is required even when `revivers` is empty. Invalid documents throw a schema decoding error. Invalid reviver results throw an `Error`; exceptions raised by a reviver pass through unchanged.
+ * `options` is required even when `revivers` is empty. Invalid documents throw a schema decoding error. Reviver results are used directly, and exceptions raised by a reviver pass through unchanged.
  *
  * @see {@link toJson} for producing the persisted document
  * @see {@link fromJsonMultiDocument} for multiple roots sharing references
@@ -972,7 +972,7 @@ export function fromJsonMultiDocument(input: unknown, options: FromJsonOptions):
  *
  * **Gotchas**
  *
- * Import is best-effort. The result contains persisted identities but no revived runtime callbacks. Invalid documents and callback results throw an `Error`; exceptions raised by a callback pass through unchanged.
+ * Import is best-effort. The result contains persisted identities but no revived runtime callbacks. Callback results are used directly, and exceptions raised by a callback pass through unchanged.
  *
  * @see {@link fromJsonSchemaMultiDocument} for multiple roots sharing definitions
  * @see {@link toSchemaFromJsonSchemaDocument} for importing directly as a runtime schema
@@ -996,7 +996,7 @@ export function fromJsonSchemaDocument(
  *
  * **Gotchas**
  *
- * Every definition is translated, including definitions that no root references. Invalid documents and callback results throw an `Error`; exceptions raised by a callback pass through unchanged.
+ * Every definition is translated, including definitions that no root references. Callback results are used directly, and exceptions raised by a callback pass through unchanged.
  *
  * @see {@link fromJsonSchemaDocument} for a single root
  * @see {@link toSchemaFromJsonSchemaMultiDocument} for importing directly as runtime schemas
@@ -1020,7 +1020,7 @@ export function fromJsonSchemaMultiDocument(
  *
  * **Gotchas**
  *
- * Import is best-effort. Built-in checks are revived with an importer-private resolver. Invalid documents and callback results throw an `Error`; exceptions raised by a callback pass through unchanged.
+ * Import is best-effort. Built-in checks are revived with an importer-private resolver. Callback results are used directly, and exceptions raised by a callback pass through unchanged.
  *
  * @see {@link fromJsonSchemaDocument} for translating without runtime revival
  * @see {@link toSchemaFromJsonSchemaMultiDocument} for multiple roots sharing definitions
@@ -1044,7 +1044,7 @@ export function toSchemaFromJsonSchemaDocument(
  *
  * **Gotchas**
  *
- * Every definition is revived, including definitions that no root references. Invalid documents and callback results throw an `Error`; exceptions raised by a callback pass through unchanged.
+ * Every definition is revived, including definitions that no root references. Callback results are used directly, and exceptions raised by a callback pass through unchanged.
  *
  * @see {@link fromJsonSchemaMultiDocument} for translating without runtime revival
  * @see {@link toSchemaFromJsonSchemaDocument} for a single root

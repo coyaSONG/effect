@@ -120,8 +120,7 @@ function noServices(schema: Schema.Top): Schema.Codec<unknown> {
 
 function expectInvalidPayload(
   json: unknown,
-  reviver: SchemaRepresentation2.AnyReviver,
-  pathSuffix: ReadonlyArray<string | number> = []
+  reviver: SchemaRepresentation2.AnyReviver
 ): void {
   const path = Formatter.formatPath([
     "representation",
@@ -129,14 +128,11 @@ function expectInvalidPayload(
     0,
     "annotations",
     "representation",
-    "payload",
-    ...pathSuffix
+    "payload"
   ])
   throws(
     () => SchemaRepresentation2.fromJson(json, { revivers: [reviver] }),
-    `${
-      pathSuffix.length === 0 ? `Invalid representation payload for ${reviver.id}` : "Expected strict JSON"
-    }\n  at ${path}`
+    `Invalid representation payload for ${reviver.id}\n  at ${path}`
   )
 }
 
@@ -237,12 +233,6 @@ describe("SchemaRepresentation2 built-in number checks", () => {
     divisor.representation.checks[0].annotations.representation.payload.divisor = "2"
     expectInvalidPayload(divisor, Schema.isMultipleOfReviver)
 
-    const minimum = SchemaRepresentation2.toJson(
-      SchemaRepresentation2.fromAST(Schema.Number.check(Schema.isGreaterThan(1)).ast)
-    ) as any
-    minimum.representation.checks[0].annotations.representation.payload.exclusiveMinimum = -0
-    expectInvalidPayload(minimum, Schema.isGreaterThanReviver, ["exclusiveMinimum"])
-
     const between = SchemaRepresentation2.toJson(
       SchemaRepresentation2.fromAST(Schema.Number.check(Schema.isBetween({ minimum: 1, maximum: 3 })).ast)
     ) as any
@@ -257,7 +247,7 @@ describe("SchemaRepresentation2 built-in number checks", () => {
     })
     throws(
       () => SchemaRepresentation2.toJson(SchemaRepresentation2.fromAST(Schema.Number.check(check).ast)),
-      `Invalid representation payload for effect/schema/isGreaterThan\n  at ["representation"]["checks"][0]["annotations"]["representation"]["payload"]`
+      `Expected JSON value, got {"exclusiveMinimum":Infinity}\n  at ["representation"]["checks"][0]["annotations"]["representation"]["payload"]`
     )
   })
 })

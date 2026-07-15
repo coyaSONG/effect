@@ -3896,9 +3896,17 @@ export function isJson(u: unknown): u is Schema.Json {
       }
     }
     onPath.add(u)
-    const ok = isArray
-      ? u.every(recur)
-      : Object.keys(u).every((key) => recur((u as Record<string, unknown>)[key]))
+    let ok = true
+    if (isArray) {
+      for (let index = 0; index < u.length; index++) {
+        if (!Object.hasOwn(u, index) || !recur(u[index])) {
+          ok = false
+          break
+        }
+      }
+    } else {
+      ok = Object.keys(u).every((key) => recur((u as Record<string, unknown>)[key]))
+    }
     // Pop on exit so siblings reaching the same node via a different path
     // don't see it as an ancestor (that would reject valid DAGs).
     onPath.delete(u)

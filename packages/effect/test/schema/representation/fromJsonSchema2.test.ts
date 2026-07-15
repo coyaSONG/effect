@@ -149,36 +149,7 @@ describe("JSON Schema importer v2", () => {
           schema: { type: "string", invalid: undefined },
           definitions: {}
         }),
-      `Invalid schema representation document\n  at ["schema"]["invalid"]`
-    )
-  })
-
-  it("contextualizes invalid onEnter results", () => {
-    throws(
-      () =>
-        SchemaRepresentation2.toSchemaFromJsonSchemaDocument({
-          dialect: "draft-2020-12",
-          schema: { type: "string" },
-          definitions: {}
-        }, {
-          onEnter: () => [] as any
-        }),
-      (error: unknown) => {
-        assert.instanceOf(error, Error)
-        assert.strictEqual(error.message, "Invalid schema representation document\n  at [\"schema\"]")
-        return undefined
-      }
-    )
-    throws(
-      () =>
-        SchemaRepresentation2.toSchemaFromJsonSchemaDocument({
-          dialect: "draft-2020-12",
-          schema: { type: "string" },
-          definitions: {}
-        }, {
-          onEnter: () => ({ type: "string", invalid: undefined })
-        }),
-      `Invalid schema representation document\n  at ["schema"]["invalid"]`
+      `Invalid schema representation document\n  at ["schema"]`
     )
   })
 

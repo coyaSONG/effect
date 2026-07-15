@@ -190,7 +190,7 @@ describe("SchemaRepresentation2 persisted wire codecs", () => {
     const invalid = {
       representation: {
         _tag: "String",
-        annotations: { invalid: -0 },
+        annotations: { invalid: 1n },
         checks: []
       },
       references: {}
@@ -202,10 +202,10 @@ describe("SchemaRepresentation2 persisted wire codecs", () => {
         return undefined
       }
     )
-    assert.isTrue(Object.is(invalid.representation.annotations.invalid, -0))
+    assert.strictEqual(invalid.representation.annotations.invalid, 1n)
   })
 
-  it("does not invoke getters or toJSON while decoding", () => {
+  it("accepts getters without invoking toJSON while decoding", () => {
     let getterCalls = 0
     let toJsonCalls = 0
     const representation = {
@@ -221,31 +221,35 @@ describe("SchemaRepresentation2 persisted wire codecs", () => {
     })
     const input = {
       representation,
-      references: {},
-      toJSON() {
-        toJsonCalls++
-        return null
-      }
+      references: {}
     }
+    Schema.decodeUnknownSync(SchemaRepresentation2.PersistedDocumentFromJson)(input)
+    assert.isTrue(getterCalls > 0)
 
     throws(
-      () => Schema.decodeUnknownSync(SchemaRepresentation2.PersistedDocumentFromJson)(input),
+      () =>
+        Schema.decodeUnknownSync(SchemaRepresentation2.PersistedDocumentFromJson)({
+          ...input,
+          toJSON() {
+            toJsonCalls++
+            return null
+          }
+        }),
       (error) => {
         assert.isTrue(Schema.isSchemaError(error))
         return undefined
       }
     )
-    assert.strictEqual(getterCalls, 0)
     assert.strictEqual(toJsonCalls, 0)
   })
 
-  it("rejects reserved identities on structural nodes during direct decode", () => {
+  it("roundtrips representation annotations on structural nodes", () => {
     const input = {
       representation: {
         _tag: "String",
         annotations: {
           representation: {
-            id: "acme/schema/notAllowed",
+            id: "acme/schema/String",
             payload: null
           }
         },
@@ -253,21 +257,56 @@ describe("SchemaRepresentation2 persisted wire codecs", () => {
       },
       references: {}
     }
-    throws(
-      () => Schema.decodeUnknownSync(SchemaRepresentation2.PersistedDocumentFromJson)(input),
-      (error) => {
-        assert.isTrue(Schema.isSchemaError(error))
-        return undefined
-      }
-    )
+    const decoded = Schema.decodeUnknownSync(SchemaRepresentation2.PersistedDocumentFromJson)(input)
+    assert.deepStrictEqual(Schema.encodeSync(SchemaRepresentation2.PersistedDocumentFromJson)(decoded), input)
+
+    const schema = SchemaRepresentation2.fromJson(input, { revivers: [] })
+    const representation = SchemaRepresentation2.fromAST(schema.ast).representation
+    assert.strictEqual(representation._tag, "String")
+    if (representation._tag === "String") {
+      assert.deepStrictEqual(representation.annotations?.representation, {
+        id: "acme/schema/String",
+        payload: null
+      })
+    }
   })
 
-  it("reports high-level projection failures", () => {
-    const symbol = Symbol("local")
-    throws(
-      () => SchemaRepresentation2.toJson(SchemaRepresentation2.fromAST(Schema.UniqueSymbol(symbol).ast)),
-      `Invalid structural value\n  at ["representation"]["symbol"]`
-    )
+  it("reports persisted wire failures", () => {
+    const cases: ReadonlyArray<readonly [SchemaRepresentation2.LiveRepresentation, string]> = [
+      [
+        { _tag: "Reference", $ref: "" },
+        `Expected <filter>, got ""\n  at ["representation"]["$ref"]`
+      ],
+      [
+        { _tag: "String", annotations: { representation: { id: "", payload: null } }, checks: [] },
+        `Expected <filter>, got ""\n  at ["representation"]["annotations"]["representation"]["id"]`
+      ],
+      [
+        SchemaRepresentation2.fromAST(Schema.UniqueSymbol(Symbol("local")).ast).representation,
+        `Expected <filter>, got Symbol(local)\n  at ["representation"]["symbol"]`
+      ],
+      [
+        {
+          _tag: "Objects",
+          propertySignatures: [{
+            name: Symbol("local"),
+            type: { _tag: "String", checks: [] },
+            isOptional: false,
+            isMutable: false
+          }],
+          indexSignatures: [],
+          checks: []
+        },
+        `Expected <filter>, got Symbol(local)\n  at ["representation"]["propertySignatures"][0]["name"]`
+      ]
+    ]
+
+    for (const [representation, message] of cases) {
+      throws(
+        () => SchemaRepresentation2.toJson({ representation, references: {} }),
+        message
+      )
+    }
   })
 
   it("encodes and decodes multi-documents independently", () => {
@@ -335,11 +374,11 @@ describe("SchemaRepresentation2 persisted wire codecs", () => {
     assert.isFalse(is(null))
   })
 
-  it("reports strict-JSON failures at the root and on direct encoding", () => {
+  it("reports JSON failures at the root and on direct encoding", () => {
     const rootFailure = Schema.decodeUnknownResult(SchemaRepresentation2.PersistedDocumentFromJson)(() => undefined)
     assert.strictEqual(rootFailure._tag, "Failure")
     if (rootFailure._tag === "Failure") {
-      assert.isTrue(rootFailure.failure.message.includes("Expected strict JSON"))
+      assert.isTrue(rootFailure.failure.message.includes("Expected JSON value"))
     }
 
     const encodeFailure = Schema.encodeUnknownResult(SchemaRepresentation2.PersistedDocumentFromJson)({

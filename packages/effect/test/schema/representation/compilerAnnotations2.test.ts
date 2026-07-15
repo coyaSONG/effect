@@ -571,34 +571,7 @@ describe("SchemaRepresentation2 compiler annotations", () => {
       )
     })
 
-    it("rejects malformed representation schemas before invoking a check callback", () => {
-      const compile = (representation: unknown) =>
-        SchemaRepresentation2.toJsonSchemaDocument({
-          representation: {
-            _tag: "String",
-            checks: [{
-              _tag: "Filter",
-              aborted: false,
-              annotations: {
-                representation: representation as any,
-                toJsonSchema: () => ({})
-              }
-            }]
-          },
-          references: {}
-        })
-
-      expectError(
-        () => compile("invalid"),
-        `Invalid schema representation document\n  at ["representation"]["checks"][0]["annotations"]["representation"]`
-      )
-      expectError(
-        () => compile({ id: "acme/schema/invalid", payload: null, schemas: "invalid" }),
-        `Invalid schema representation document\n  at ["representation"]["checks"][0]["annotations"]["representation"]["schemas"]`
-      )
-    })
-
-    it("reports missing and invalid declaration callbacks", () => {
+    it("reports missing declaration callbacks", () => {
       const missing: SchemaRepresentation2.Document<SchemaRepresentation2.LiveAnnotations> = {
         representation: {
           _tag: "Declaration",
@@ -610,18 +583,6 @@ describe("SchemaRepresentation2 compiler annotations", () => {
       expectError(
         () => SchemaRepresentation2.toJsonSchemaDocument(missing),
         `Missing JSON Schema callback\n  at ["representation"]["annotations"]["toJsonSchema"]`
-      )
-
-      const invalid: SchemaRepresentation2.Document<SchemaRepresentation2.LiveAnnotations> = {
-        representation: {
-          ...missing.representation,
-          annotations: { toJsonSchema: (() => null) as any }
-        } as SchemaRepresentation2.LiveRepresentation,
-        references: {}
-      }
-      expectError(
-        () => SchemaRepresentation2.toJsonSchemaDocument(invalid),
-        `Invalid JSON Schema callback result\n  at ["representation"]["annotations"]["toJsonSchema"]`
       )
     })
 
@@ -965,7 +926,7 @@ describe("SchemaRepresentation2 compiler annotations", () => {
       }])
     })
 
-    it("reports missing, invalid and throwing generation callbacks", () => {
+    it("reports missing generation callbacks and preserves callback exceptions", () => {
       const missing: SchemaRepresentation2.MultiDocument<SchemaRepresentation2.LiveAnnotations> = {
         representations: [{
           _tag: "String",
@@ -976,20 +937,6 @@ describe("SchemaRepresentation2 compiler annotations", () => {
       expectError(
         () => SchemaRepresentation2.toCodeDocument(missing),
         `Missing generation callback\n  at ["representations"][0]["checks"][0]["annotations"]["generation"]`
-      )
-
-      const invalid: SchemaRepresentation2.MultiDocument<SchemaRepresentation2.LiveAnnotations> = {
-        representations: [{
-          _tag: "Declaration",
-          typeParameters: [],
-          checks: [],
-          annotations: { generation: (() => ({ runtime: "", Type: "string" })) as any }
-        }],
-        references: {}
-      }
-      expectError(
-        () => SchemaRepresentation2.toCodeDocument(invalid),
-        `Invalid generation callback result\n  at ["representations"][0]["annotations"]["generation"]`
       )
 
       const cause = new Error("generation callback")
@@ -1011,79 +958,6 @@ describe("SchemaRepresentation2 compiler annotations", () => {
       expectError(
         () => SchemaRepresentation2.toCodeDocument(throwing),
         cause
-      )
-    })
-
-    it("rejects malformed check generation results without evaluating accessors", () => {
-      const compile = (generation: SchemaRepresentation2.Generation.Check) =>
-        SchemaRepresentation2.toCodeDocument({
-          representations: [{
-            _tag: "String",
-            checks: [{
-              _tag: "Filter",
-              aborted: false,
-              annotations: { generation }
-            }]
-          }],
-          references: {}
-        })
-      const message =
-        `Invalid generation callback result\n  at ["representations"][0]["checks"][0]["annotations"]["generation"]`
-
-      for (
-        const generation of [
-          (() => null) as any,
-          (() => ({ runtime: "" })) as any,
-          (() => ({ runtime: "Custom.check()", importDeclarations: [""] })) as any
-        ]
-      ) {
-        expectError(() => compile(generation), message)
-      }
-
-      let reads = 0
-      const accessorOutput = {}
-      Object.defineProperty(accessorOutput, "runtime", {
-        enumerable: true,
-        get() {
-          reads++
-          return "Custom.check()"
-        }
-      })
-      expectError(() => compile((() => accessorOutput) as any), message)
-      assert.strictEqual(reads, 0)
-
-      const nullPrototypeOutput = Object.create(null)
-      nullPrototypeOutput.runtime = "Custom.check()"
-      assert.strictEqual(
-        compile((() => nullPrototypeOutput) as any).codes[0].runtime,
-        "Schema.String.check(Custom.check())"
-      )
-    })
-
-    it("rejects malformed representation schemas before invoking a generation callback", () => {
-      const compile = (representation: unknown) =>
-        SchemaRepresentation2.toCodeDocument({
-          representations: [{
-            _tag: "String",
-            checks: [{
-              _tag: "Filter",
-              aborted: false,
-              annotations: {
-                representation: representation as any,
-                generation: () => ({ runtime: "Custom.check()" })
-              }
-            }]
-          }],
-          references: {}
-        })
-
-      expectError(
-        () => compile("invalid"),
-        `Invalid schema representation document\n  at ["representations"][0]["checks"][0]["annotations"]["representation"]`
-      )
-      expectError(
-        () => compile({ id: "acme/schema/invalid", payload: null, schemas: "invalid" }),
-        `Invalid schema representation document\n  at ["representations"][0]["checks"][0]["annotations"]["representation"]["schemas"]`
       )
     })
 
