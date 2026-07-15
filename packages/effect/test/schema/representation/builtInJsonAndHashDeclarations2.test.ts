@@ -82,7 +82,7 @@ describe("SchemaRepresentation2 built-in JSON and hash collection declarations",
         })
       }
 
-      const persisted = Schema.decodeUnknownSync(SchemaRepresentation2.PersistedDocumentFromJson)(
+      const persisted = Schema.decodeUnknownSync(SchemaRepresentation2.DocumentFromJson)(
         SchemaRepresentation2.toJson(SchemaRepresentation2.fromAST(entry.schema.ast))
       )
       assert.strictEqual(persisted.representation._tag, "Declaration")

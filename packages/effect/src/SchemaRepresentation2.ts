@@ -10,18 +10,6 @@ import type * as Schema from "./Schema.ts"
 import type * as SchemaAST from "./SchemaAST.ts"
 
 /**
- * Annotation slots used by every representation node.
- *
- * @category models
- * @since 4.0.0
- */
-export interface RepresentationAnnotationSlots {
-  readonly node: unknown
-  readonly filter: unknown
-  readonly key: unknown
-}
-
-/**
  * Open persistence identity carried by declarations and opaque checks.
  *
  * @category annotations
@@ -33,60 +21,13 @@ export interface RepresentationAnnotation<S> {
   readonly schemas?: ReadonlyArray<S> | undefined
 }
 
-/**
- * Rebinds only the schema dependencies of a representation annotation.
- *
- * @category utility types
- * @since 4.0.0
- */
-export type RebindRepresentation<A, S> =
+type RebindRepresentation<A, S> =
   & Omit<A, "representation">
   & { readonly representation?: RepresentationAnnotation<S> | undefined }
 
-/**
- * Annotation slots retained by a live representation.
- *
- * @category models
- * @since 4.0.0
- */
-export interface LiveAnnotations extends RepresentationAnnotationSlots {
-  readonly node: RebindRepresentation<Schema.Annotations.Annotations, LiveRepresentation>
-  readonly filter: RebindRepresentation<Schema.Annotations.Filter, LiveRepresentation>
-  readonly key: Schema.Annotations.Key<unknown>
-}
-
-/**
- * JSON annotations retained on ordinary structural positions.
- *
- * @category models
- * @since 4.0.0
- */
-export interface PersistedOrdinaryAnnotations {
-  readonly [key: string]: Schema.Json
-}
-
-/**
- * JSON annotations retained on declarations and opaque checks.
- *
- * @category models
- * @since 4.0.0
- */
-export interface PersistedOpaqueAnnotations<S> {
-  readonly [key: string]: Schema.Json | RepresentationAnnotation<S> | undefined
-  readonly representation?: RepresentationAnnotation<S> | undefined
-}
-
-/**
- * Annotation slots retained by a persisted representation.
- *
- * @category models
- * @since 4.0.0
- */
-export interface PersistedAnnotations extends RepresentationAnnotationSlots {
-  readonly node: PersistedOpaqueAnnotations<PersistedRepresentation>
-  readonly filter: PersistedOpaqueAnnotations<PersistedRepresentation>
-  readonly key: PersistedOrdinaryAnnotations
-}
+type NodeAnnotations = RebindRepresentation<Schema.Annotations.Annotations, Representation>
+type FilterAnnotations = RebindRepresentation<Schema.Annotations.Filter, Representation>
+type KeyAnnotations = Schema.Annotations.Key<unknown>
 
 /**
  * Input passed to JSON Schema compiler annotations.
@@ -206,11 +147,11 @@ export declare namespace Generation {
  * @category models
  * @since 4.0.0
  */
-export interface Declaration<A extends RepresentationAnnotationSlots> {
+export interface Declaration {
   readonly _tag: "Declaration"
-  readonly annotations?: A["node"] | undefined
-  readonly typeParameters: ReadonlyArray<Representation<A>>
-  readonly checks: ReadonlyArray<Check<A>>
+  readonly annotations?: NodeAnnotations | undefined
+  readonly typeParameters: ReadonlyArray<Representation>
+  readonly checks: ReadonlyArray<Check>
 }
 
 /**
@@ -219,11 +160,11 @@ export interface Declaration<A extends RepresentationAnnotationSlots> {
  * @category models
  * @since 4.0.0
  */
-export interface Suspend<A extends RepresentationAnnotationSlots> {
+export interface Suspend {
   readonly _tag: "Suspend"
-  readonly annotations?: A["node"] | undefined
+  readonly annotations?: NodeAnnotations | undefined
   readonly checks: readonly []
-  readonly thunk: Representation<A>
+  readonly thunk: Representation
 }
 
 /**
@@ -237,10 +178,10 @@ export interface Reference {
   readonly $ref: string
 }
 
-interface Keyword<A extends RepresentationAnnotationSlots, Tag extends string> {
+interface Keyword<Tag extends string> {
   readonly _tag: Tag
-  readonly annotations?: A["node"] | undefined
-  readonly checks: ReadonlyArray<Check<A>>
+  readonly annotations?: NodeAnnotations | undefined
+  readonly checks: ReadonlyArray<Check>
 }
 
 /**
@@ -249,42 +190,42 @@ interface Keyword<A extends RepresentationAnnotationSlots, Tag extends string> {
  * @category models
  * @since 4.0.0
  */
-export interface Null<A extends RepresentationAnnotationSlots> extends Keyword<A, "Null"> {}
+export interface Null extends Keyword<"Null"> {}
 /**
  * The undefined keyword representation.
  *
  * @category models
  * @since 4.0.0
  */
-export interface Undefined<A extends RepresentationAnnotationSlots> extends Keyword<A, "Undefined"> {}
+export interface Undefined extends Keyword<"Undefined"> {}
 /**
  * The void keyword representation.
  *
  * @category models
  * @since 4.0.0
  */
-export interface Void<A extends RepresentationAnnotationSlots> extends Keyword<A, "Void"> {}
+export interface Void extends Keyword<"Void"> {}
 /**
  * The never keyword representation.
  *
  * @category models
  * @since 4.0.0
  */
-export interface Never<A extends RepresentationAnnotationSlots> extends Keyword<A, "Never"> {}
+export interface Never extends Keyword<"Never"> {}
 /**
  * The unknown keyword representation.
  *
  * @category models
  * @since 4.0.0
  */
-export interface Unknown<A extends RepresentationAnnotationSlots> extends Keyword<A, "Unknown"> {}
+export interface Unknown extends Keyword<"Unknown"> {}
 /**
  * The any keyword representation.
  *
  * @category models
  * @since 4.0.0
  */
-export interface Any<A extends RepresentationAnnotationSlots> extends Keyword<A, "Any"> {}
+export interface Any extends Keyword<"Any"> {}
 
 /**
  * A string representation.
@@ -292,9 +233,9 @@ export interface Any<A extends RepresentationAnnotationSlots> extends Keyword<A,
  * @category models
  * @since 4.0.0
  */
-export interface String<A extends RepresentationAnnotationSlots> extends Keyword<A, "String"> {
+export interface String extends Keyword<"String"> {
   readonly contentMediaType?: string | undefined
-  readonly contentSchema?: Representation<A> | undefined
+  readonly contentSchema?: Representation | undefined
 }
 
 /**
@@ -303,28 +244,28 @@ export interface String<A extends RepresentationAnnotationSlots> extends Keyword
  * @category models
  * @since 4.0.0
  */
-export interface Number<A extends RepresentationAnnotationSlots> extends Keyword<A, "Number"> {}
+export interface Number extends Keyword<"Number"> {}
 /**
  * A boolean representation.
  *
  * @category models
  * @since 4.0.0
  */
-export interface Boolean<A extends RepresentationAnnotationSlots> extends Keyword<A, "Boolean"> {}
+export interface Boolean extends Keyword<"Boolean"> {}
 /**
  * A bigint representation.
  *
  * @category models
  * @since 4.0.0
  */
-export interface BigInt<A extends RepresentationAnnotationSlots> extends Keyword<A, "BigInt"> {}
+export interface BigInt extends Keyword<"BigInt"> {}
 /**
  * A symbol representation.
  *
  * @category models
  * @since 4.0.0
  */
-export interface Symbol<A extends RepresentationAnnotationSlots> extends Keyword<A, "Symbol"> {}
+export interface Symbol extends Keyword<"Symbol"> {}
 
 /**
  * A literal representation.
@@ -332,7 +273,7 @@ export interface Symbol<A extends RepresentationAnnotationSlots> extends Keyword
  * @category models
  * @since 4.0.0
  */
-export interface Literal<A extends RepresentationAnnotationSlots> extends Keyword<A, "Literal"> {
+export interface Literal extends Keyword<"Literal"> {
   readonly literal: string | number | boolean | bigint
 }
 
@@ -342,7 +283,7 @@ export interface Literal<A extends RepresentationAnnotationSlots> extends Keywor
  * @category models
  * @since 4.0.0
  */
-export interface UniqueSymbol<A extends RepresentationAnnotationSlots> extends Keyword<A, "UniqueSymbol"> {
+export interface UniqueSymbol extends Keyword<"UniqueSymbol"> {
   readonly symbol: symbol
 }
 
@@ -352,7 +293,7 @@ export interface UniqueSymbol<A extends RepresentationAnnotationSlots> extends K
  * @category models
  * @since 4.0.0
  */
-export interface ObjectKeyword<A extends RepresentationAnnotationSlots> extends Keyword<A, "ObjectKeyword"> {}
+export interface ObjectKeyword extends Keyword<"ObjectKeyword"> {}
 
 /**
  * An enum representation.
@@ -360,7 +301,7 @@ export interface ObjectKeyword<A extends RepresentationAnnotationSlots> extends 
  * @category models
  * @since 4.0.0
  */
-export interface Enum<A extends RepresentationAnnotationSlots> extends Keyword<A, "Enum"> {
+export interface Enum extends Keyword<"Enum"> {
   readonly enums: ReadonlyArray<readonly [string, string | number]>
 }
 
@@ -370,8 +311,8 @@ export interface Enum<A extends RepresentationAnnotationSlots> extends Keyword<A
  * @category models
  * @since 4.0.0
  */
-export interface TemplateLiteral<A extends RepresentationAnnotationSlots> extends Keyword<A, "TemplateLiteral"> {
-  readonly parts: ReadonlyArray<Representation<A>>
+export interface TemplateLiteral extends Keyword<"TemplateLiteral"> {
+  readonly parts: ReadonlyArray<Representation>
 }
 
 /**
@@ -380,10 +321,10 @@ export interface TemplateLiteral<A extends RepresentationAnnotationSlots> extend
  * @category models
  * @since 4.0.0
  */
-export interface Element<A extends RepresentationAnnotationSlots> {
+export interface Element {
   readonly isOptional: boolean
-  readonly type: Representation<A>
-  readonly annotations?: A["key"] | undefined
+  readonly type: Representation
+  readonly annotations?: KeyAnnotations | undefined
 }
 
 /**
@@ -392,9 +333,9 @@ export interface Element<A extends RepresentationAnnotationSlots> {
  * @category models
  * @since 4.0.0
  */
-export interface Arrays<A extends RepresentationAnnotationSlots> extends Keyword<A, "Arrays"> {
-  readonly elements: ReadonlyArray<Element<A>>
-  readonly rest: ReadonlyArray<Representation<A>>
+export interface Arrays extends Keyword<"Arrays"> {
+  readonly elements: ReadonlyArray<Element>
+  readonly rest: ReadonlyArray<Representation>
 }
 
 /**
@@ -403,12 +344,12 @@ export interface Arrays<A extends RepresentationAnnotationSlots> extends Keyword
  * @category models
  * @since 4.0.0
  */
-export interface PropertySignature<A extends RepresentationAnnotationSlots> {
+export interface PropertySignature {
   readonly name: PropertyKey | number
-  readonly type: Representation<A>
+  readonly type: Representation
   readonly isOptional: boolean
   readonly isMutable: boolean
-  readonly annotations?: A["key"] | undefined
+  readonly annotations?: KeyAnnotations | undefined
 }
 
 /**
@@ -417,9 +358,9 @@ export interface PropertySignature<A extends RepresentationAnnotationSlots> {
  * @category models
  * @since 4.0.0
  */
-export interface IndexSignature<A extends RepresentationAnnotationSlots> {
-  readonly parameter: Representation<A>
-  readonly type: Representation<A>
+export interface IndexSignature {
+  readonly parameter: Representation
+  readonly type: Representation
 }
 
 /**
@@ -428,9 +369,9 @@ export interface IndexSignature<A extends RepresentationAnnotationSlots> {
  * @category models
  * @since 4.0.0
  */
-export interface Objects<A extends RepresentationAnnotationSlots> extends Keyword<A, "Objects"> {
-  readonly propertySignatures: ReadonlyArray<PropertySignature<A>>
-  readonly indexSignatures: ReadonlyArray<IndexSignature<A>>
+export interface Objects extends Keyword<"Objects"> {
+  readonly propertySignatures: ReadonlyArray<PropertySignature>
+  readonly indexSignatures: ReadonlyArray<IndexSignature>
 }
 
 /**
@@ -439,8 +380,8 @@ export interface Objects<A extends RepresentationAnnotationSlots> extends Keywor
  * @category models
  * @since 4.0.0
  */
-export interface Union<A extends RepresentationAnnotationSlots> extends Keyword<A, "Union"> {
-  readonly types: ReadonlyArray<Representation<A>>
+export interface Union extends Keyword<"Union"> {
+  readonly types: ReadonlyArray<Representation>
   readonly mode: "anyOf" | "oneOf"
 }
 
@@ -450,45 +391,29 @@ export interface Union<A extends RepresentationAnnotationSlots> extends Keyword<
  * @category models
  * @since 4.0.0
  */
-export type Representation<A extends RepresentationAnnotationSlots> =
-  | Declaration<A>
+export type Representation =
+  | Declaration
   | Reference
-  | Suspend<A>
-  | Null<A>
-  | Undefined<A>
-  | Void<A>
-  | Never<A>
-  | Unknown<A>
-  | Any<A>
-  | String<A>
-  | Number<A>
-  | Boolean<A>
-  | BigInt<A>
-  | Symbol<A>
-  | Literal<A>
-  | UniqueSymbol<A>
-  | ObjectKeyword<A>
-  | Enum<A>
-  | TemplateLiteral<A>
-  | Arrays<A>
-  | Objects<A>
-  | Union<A>
-
-/**
- * A live representation.
- *
- * @category models
- * @since 4.0.0
- */
-export type LiveRepresentation = Representation<LiveAnnotations>
-
-/**
- * A persisted representation.
- *
- * @category models
- * @since 4.0.0
- */
-export type PersistedRepresentation = Representation<PersistedAnnotations>
+  | Suspend
+  | Null
+  | Undefined
+  | Void
+  | Never
+  | Unknown
+  | Any
+  | String
+  | Number
+  | Boolean
+  | BigInt
+  | Symbol
+  | Literal
+  | UniqueSymbol
+  | ObjectKeyword
+  | Enum
+  | TemplateLiteral
+  | Arrays
+  | Objects
+  | Union
 
 /**
  * A structural check.
@@ -496,7 +421,7 @@ export type PersistedRepresentation = Representation<PersistedAnnotations>
  * @category models
  * @since 4.0.0
  */
-export type Check<A extends RepresentationAnnotationSlots> = Filter<A> | FilterGroup<A>
+export type Check = Filter | FilterGroup
 
 /**
  * An opaque leaf check.
@@ -504,9 +429,9 @@ export type Check<A extends RepresentationAnnotationSlots> = Filter<A> | FilterG
  * @category models
  * @since 4.0.0
  */
-export interface Filter<A extends RepresentationAnnotationSlots> {
+export interface Filter {
   readonly _tag: "Filter"
-  readonly annotations?: A["filter"] | undefined
+  readonly annotations?: FilterAnnotations | undefined
   readonly aborted: boolean
 }
 
@@ -516,10 +441,10 @@ export interface Filter<A extends RepresentationAnnotationSlots> {
  * @category models
  * @since 4.0.0
  */
-export interface FilterGroup<A extends RepresentationAnnotationSlots> {
+export interface FilterGroup {
   readonly _tag: "FilterGroup"
-  readonly annotations?: A["filter"] | undefined
-  readonly checks: readonly [Check<A>, ...Array<Check<A>>]
+  readonly annotations?: FilterAnnotations | undefined
+  readonly checks: readonly [Check, ...Array<Check>]
 }
 
 /**
@@ -528,8 +453,8 @@ export interface FilterGroup<A extends RepresentationAnnotationSlots> {
  * @category models
  * @since 4.0.0
  */
-export interface References<A extends RepresentationAnnotationSlots> {
-  readonly [$ref: string]: Representation<A>
+export interface References {
+  readonly [$ref: string]: Representation
 }
 
 /**
@@ -538,9 +463,9 @@ export interface References<A extends RepresentationAnnotationSlots> {
  * @category models
  * @since 4.0.0
  */
-export interface Document<A extends RepresentationAnnotationSlots> {
-  readonly representation: Representation<A>
-  readonly references: References<A>
+export interface Document {
+  readonly representation: Representation
+  readonly references: References
 }
 
 /**
@@ -549,9 +474,9 @@ export interface Document<A extends RepresentationAnnotationSlots> {
  * @category models
  * @since 4.0.0
  */
-export interface MultiDocument<A extends RepresentationAnnotationSlots> {
-  readonly representations: readonly [Representation<A>, ...Array<Representation<A>>]
-  readonly references: References<A>
+export interface MultiDocument {
+  readonly representations: readonly [Representation, ...Array<Representation>]
+  readonly references: References
 }
 
 /**
@@ -737,7 +662,7 @@ export interface CodeDocument {
  * @category constructors
  * @since 4.0.0
  */
-export function fromAST(ast: SchemaAST.AST): Document<LiveAnnotations> {
+export function fromAST(ast: SchemaAST.AST): Document {
   return InternalRepresentation.fromAST(ast)
 }
 
@@ -749,7 +674,7 @@ export function fromAST(ast: SchemaAST.AST): Document<LiveAnnotations> {
  */
 export function fromASTs(
   asts: readonly [SchemaAST.AST, ...Array<SchemaAST.AST>]
-): MultiDocument<LiveAnnotations> {
+): MultiDocument {
   return InternalRepresentation.fromASTs(asts)
 }
 
@@ -770,7 +695,7 @@ export function fromASTs(
  * @since 4.0.0
  */
 export function toJsonSchemaDocument(
-  document: Document<LiveAnnotations>,
+  document: Document,
   options?: Schema.ToJsonSchemaOptions
 ): JsonSchema.Document<"draft-2020-12"> {
   return InternalRepresentation.toJsonSchemaDocument(document, options)
@@ -793,7 +718,7 @@ export function toJsonSchemaDocument(
  * @since 4.0.0
  */
 export function toJsonSchemaMultiDocument(
-  document: MultiDocument<LiveAnnotations>,
+  document: MultiDocument,
   options?: Schema.ToJsonSchemaOptions
 ): JsonSchema.MultiDocument<"draft-2020-12"> {
   return InternalRepresentation.toJsonSchemaMultiDocument(document, options)
@@ -813,7 +738,7 @@ export function toJsonSchemaMultiDocument(
  * @category transforming
  * @since 4.0.0
  */
-export function toCodeDocument(document: MultiDocument<LiveAnnotations>): CodeDocument {
+export function toCodeDocument(document: MultiDocument): CodeDocument {
   return InternalRepresentation.toCodeDocument(document)
 }
 
@@ -848,14 +773,14 @@ export function toCodeDocumentFromSchemaMultiDocument(document: SchemaMultiDocum
  *
  * Extended structural primitives use tagged JSON envelopes. Payloads and generic annotations remain ordinary JSON.
  *
- * @see {@link PersistedMultiDocumentFromJson} for documents with multiple roots
+ * @see {@link MultiDocumentFromJson} for documents with multiple roots
  * @see {@link toJson} for projecting a live document before encoding it
  *
  * @category schemas
  * @since 4.0.0
  */
-export const PersistedDocumentFromJson: Schema.Codec<Document<PersistedAnnotations>, Schema.Json> =
-  InternalRepresentationSchema.getPersistedDocumentFromJson()
+export const DocumentFromJson: Schema.Codec<Document, Schema.Json> = InternalRepresentationSchema
+  .getPersistedDocumentFromJson()
 
 /**
  * Schema for persisted multi-root representation documents encoded as JSON.
@@ -868,14 +793,14 @@ export const PersistedDocumentFromJson: Schema.Codec<Document<PersistedAnnotatio
  *
  * Decoding validates persisted data but does not reconstruct schemas or runtime callbacks.
  *
- * @see {@link PersistedDocumentFromJson} for a single-root document
+ * @see {@link DocumentFromJson} for a single-root document
  * @see {@link toJsonMultiDocument} for projecting a live multi-document before encoding it
  *
  * @category schemas
  * @since 4.0.0
  */
-export const PersistedMultiDocumentFromJson: Schema.Codec<MultiDocument<PersistedAnnotations>, Schema.Json> =
-  InternalRepresentationSchema.getPersistedMultiDocumentFromJson()
+export const MultiDocumentFromJson: Schema.Codec<MultiDocument, Schema.Json> = InternalRepresentationSchema
+  .getPersistedMultiDocumentFromJson()
 
 /**
  * Projects a live single-root representation document and encodes it as JSON.
@@ -889,13 +814,13 @@ export const PersistedMultiDocumentFromJson: Schema.Codec<MultiDocument<Persiste
  * Generic annotations that are not JSON are omitted. Invalid persistence identities and unsupported structural values throw an `Error` containing their representation path.
  *
  * @see {@link fromAST} for constructing the live document
- * @see {@link PersistedDocumentFromJson} for direct access to the persisted codec
+ * @see {@link DocumentFromJson} for direct access to the document codec
  * @see {@link toJsonMultiDocument} for documents with multiple roots
  *
  * @category encoding
  * @since 4.0.0
  */
-export function toJson(document: Document<LiveAnnotations>): Schema.Json {
+export function toJson(document: Document): Schema.Json {
   return InternalRepresentationSchema.toJson(document)
 }
 
@@ -911,13 +836,13 @@ export function toJson(document: Document<LiveAnnotations>): Schema.Json {
  * The root order and shared reference keys are preserved, while non-JSON generic annotations are omitted.
  *
  * @see {@link fromASTs} for constructing the live multi-document
- * @see {@link PersistedMultiDocumentFromJson} for direct access to the persisted codec
+ * @see {@link MultiDocumentFromJson} for direct access to the multi-document codec
  * @see {@link toJson} for a single-root document
  *
  * @category encoding
  * @since 4.0.0
  */
-export function toJsonMultiDocument(document: MultiDocument<LiveAnnotations>): Schema.Json {
+export function toJsonMultiDocument(document: MultiDocument): Schema.Json {
   return InternalRepresentationSchema.toJsonMultiDocument(document)
 }
 
@@ -983,7 +908,7 @@ export function fromJsonMultiDocument(input: unknown, options: FromJsonOptions):
 export function fromJsonSchemaDocument(
   document: JsonSchema.Document<"draft-2020-12">,
   options?: FromJsonSchemaOptions
-): Document<PersistedAnnotations> {
+): Document {
   return InternalRepresentation.fromJsonSchemaDocument(document, options)
 }
 
@@ -1007,7 +932,7 @@ export function fromJsonSchemaDocument(
 export function fromJsonSchemaMultiDocument(
   document: JsonSchema.MultiDocument<"draft-2020-12">,
   options?: FromJsonSchemaOptions
-): MultiDocument<PersistedAnnotations> {
+): MultiDocument {
   return InternalRepresentation.fromJsonSchemaMultiDocument(document, options)
 }
 

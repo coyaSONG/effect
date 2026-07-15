@@ -14,6 +14,13 @@ import * as InternalAnnotations from "./annotations.ts"
 import * as InternalSchema from "./schema.ts"
 
 type Path = ReadonlyArray<string | number>
+type NodeAnnotations = SchemaRepresentation.Declaration["annotations"]
+type FilterAnnotations = SchemaRepresentation.Filter["annotations"]
+type KeyAnnotations = SchemaRepresentation.Element["annotations"]
+type RepresentationAnnotation = SchemaRepresentation.RepresentationAnnotation<SchemaRepresentation.Representation>
+type RebindRepresentation<A> =
+  & Omit<A, "representation">
+  & { readonly representation?: RepresentationAnnotation | undefined }
 
 type ArrayDataResult =
   | { readonly _tag: "Success"; readonly values: ReadonlyArray<unknown> }
@@ -73,10 +80,10 @@ function annotationsField<A>(annotations: A | undefined): { readonly annotations
 }
 
 function projectRepresentationAnnotation(
-  input: SchemaRepresentation.RepresentationAnnotation<SchemaRepresentation.LiveRepresentation>,
+  input: RepresentationAnnotation,
   path: Path,
   ancestors: ReadonlySet<object>
-): SchemaRepresentation.RepresentationAnnotation<SchemaRepresentation.PersistedRepresentation> {
+): RepresentationAnnotation {
   if (input.schemas === undefined) return { id: input.id, payload: input.payload }
   const schemas = projectArray(
     input.schemas,
@@ -91,7 +98,7 @@ function projectAnnotationBag(
   path: Path,
   ancestors: ReadonlySet<object>,
   excludedKeys: ReadonlySet<string> = new Set()
-): SchemaRepresentation.PersistedOpaqueAnnotations<SchemaRepresentation.PersistedRepresentation> | undefined {
+): NodeAnnotations {
   if (input === undefined) return undefined
 
   const out: Record<string, unknown> = {}
@@ -99,7 +106,7 @@ function projectAnnotationBag(
     if (value === undefined || excludedKeys.has(key)) continue
     if (key === "representation") {
       const representation = projectRepresentationAnnotation(
-        value as SchemaRepresentation.RepresentationAnnotation<SchemaRepresentation.LiveRepresentation>,
+        value as RepresentationAnnotation,
         [...path, key],
         ancestors
       )
@@ -111,48 +118,48 @@ function projectAnnotationBag(
 
   return Object.keys(out).length === 0
     ? undefined
-    : out as SchemaRepresentation.PersistedOpaqueAnnotations<SchemaRepresentation.PersistedRepresentation>
+    : out as NonNullable<NodeAnnotations>
 }
 
 function projectNodeAnnotations(
-  input: SchemaRepresentation.LiveAnnotations["node"] | undefined,
+  input: NodeAnnotations | undefined,
   path: Path,
   ancestors: ReadonlySet<object>,
   excludedKeys?: ReadonlySet<string>
-): SchemaRepresentation.PersistedAnnotations["node"] | undefined {
+): NodeAnnotations | undefined {
   return projectAnnotationBag(input, path, ancestors, excludedKeys)
 }
 
 function projectFilterAnnotations(
-  input: SchemaRepresentation.LiveAnnotations["filter"] | undefined,
+  input: FilterAnnotations | undefined,
   path: Path,
   ancestors: ReadonlySet<object>
-): SchemaRepresentation.PersistedAnnotations["filter"] | undefined {
-  return projectAnnotationBag(input, path, ancestors)
+): FilterAnnotations | undefined {
+  return projectAnnotationBag(input, path, ancestors) as FilterAnnotations
 }
 
 function projectKeyAnnotations(
-  input: SchemaRepresentation.LiveAnnotations["key"] | undefined,
+  input: KeyAnnotations | undefined,
   path: Path,
   ancestors: ReadonlySet<object>
-): SchemaRepresentation.PersistedAnnotations["key"] | undefined {
+): KeyAnnotations | undefined {
   const annotations = projectAnnotationBag(input, path, ancestors)
-  return annotations as SchemaRepresentation.PersistedAnnotations["key"] | undefined
+  return annotations as KeyAnnotations | undefined
 }
 
 function projectChecks(
-  checks: ReadonlyArray<SchemaRepresentation.Check<SchemaRepresentation.LiveAnnotations>>,
+  checks: ReadonlyArray<SchemaRepresentation.Check>,
   path: Path,
   ancestors: ReadonlySet<object>
-): ReadonlyArray<SchemaRepresentation.Check<SchemaRepresentation.PersistedAnnotations>> {
+): ReadonlyArray<SchemaRepresentation.Check> {
   return projectArray(checks, path, (check, checkPath) => projectCheck(check, checkPath, ancestors))
 }
 
 function projectCheck(
-  check: SchemaRepresentation.Check<SchemaRepresentation.LiveAnnotations>,
+  check: SchemaRepresentation.Check,
   path: Path,
   ancestors: ReadonlySet<object>
-): SchemaRepresentation.Check<SchemaRepresentation.PersistedAnnotations> {
+): SchemaRepresentation.Check {
   if (ancestors.has(check)) return invalidStructuralValue(path)
   const nextAncestors = new Set(ancestors)
   nextAncestors.add(check)
@@ -180,8 +187,8 @@ function projectCheck(
       return {
         _tag: "FilterGroup",
         checks: checks as readonly [
-          SchemaRepresentation.Check<SchemaRepresentation.PersistedAnnotations>,
-          ...Array<SchemaRepresentation.Check<SchemaRepresentation.PersistedAnnotations>>
+          SchemaRepresentation.Check,
+          ...Array<SchemaRepresentation.Check>
         ],
         ...annotationsField(annotations)
       }
@@ -190,10 +197,10 @@ function projectCheck(
 }
 
 function projectRepresentation(
-  representation: SchemaRepresentation.LiveRepresentation,
+  representation: SchemaRepresentation.Representation,
   path: Path,
   ancestors: ReadonlySet<object> = new Set()
-): SchemaRepresentation.PersistedRepresentation {
+): SchemaRepresentation.Representation {
   if (ancestors.has(representation)) return invalidStructuralValue(path)
   const nextAncestors = new Set(ancestors)
   nextAncestors.add(representation)
@@ -255,7 +262,7 @@ function projectRepresentation(
         _tag: representation._tag,
         checks,
         ...annotationsField(annotations)
-      } as SchemaRepresentation.PersistedRepresentation
+      } as SchemaRepresentation.Representation
     }
     case "String": {
       const annotations = projectNodeAnnotations(
@@ -347,8 +354,8 @@ function projectRepresentation(
       )
       const checks = projectChecks(representation.checks, [...path, "checks"], nextAncestors)
       const elements = projectArray<
-        SchemaRepresentation.Element<SchemaRepresentation.LiveAnnotations>,
-        SchemaRepresentation.Element<SchemaRepresentation.PersistedAnnotations>
+        SchemaRepresentation.Element,
+        SchemaRepresentation.Element
       >(representation.elements, [...path, "elements"], (element, elementPath) => {
         const type = projectRepresentation(element.type, [...elementPath, "type"], nextAncestors)
         const elementAnnotations = projectKeyAnnotations(
@@ -383,8 +390,8 @@ function projectRepresentation(
       )
       const checks = projectChecks(representation.checks, [...path, "checks"], nextAncestors)
       const propertySignatures = projectArray<
-        SchemaRepresentation.PropertySignature<SchemaRepresentation.LiveAnnotations>,
-        SchemaRepresentation.PropertySignature<SchemaRepresentation.PersistedAnnotations>
+        SchemaRepresentation.PropertySignature,
+        SchemaRepresentation.PropertySignature
       >(
         representation.propertySignatures,
         [...path, "propertySignatures"],
@@ -405,8 +412,8 @@ function projectRepresentation(
         }
       )
       const indexSignatures = projectArray<
-        SchemaRepresentation.IndexSignature<SchemaRepresentation.LiveAnnotations>,
-        SchemaRepresentation.IndexSignature<SchemaRepresentation.PersistedAnnotations>
+        SchemaRepresentation.IndexSignature,
+        SchemaRepresentation.IndexSignature
       >(
         representation.indexSignatures,
         [...path, "indexSignatures"],
@@ -448,10 +455,10 @@ function projectRepresentation(
 }
 
 function projectReferences(
-  references: SchemaRepresentation.References<SchemaRepresentation.LiveAnnotations>,
+  references: SchemaRepresentation.References,
   path: Path
-): SchemaRepresentation.References<SchemaRepresentation.PersistedAnnotations> {
-  const out: Record<string, SchemaRepresentation.PersistedRepresentation> = {}
+): SchemaRepresentation.References {
+  const out: Record<string, SchemaRepresentation.Representation> = {}
   for (const [key, value] of Object.entries(references)) {
     const representation = projectRepresentation(value, [...path, key])
     InternalRecord.set(out, key, representation)
@@ -461,8 +468,8 @@ function projectReferences(
 
 /** @internal */
 export function projectDocument(
-  document: SchemaRepresentation.Document<SchemaRepresentation.LiveAnnotations>
-): SchemaRepresentation.Document<SchemaRepresentation.PersistedAnnotations> {
+  document: SchemaRepresentation.Document
+): SchemaRepresentation.Document {
   const representation = projectRepresentation(document.representation, ["representation"])
   const references = projectReferences(document.references, ["references"])
   return { representation, references }
@@ -470,8 +477,8 @@ export function projectDocument(
 
 /** @internal */
 export function projectMultiDocument(
-  document: SchemaRepresentation.MultiDocument<SchemaRepresentation.LiveAnnotations>
-): SchemaRepresentation.MultiDocument<SchemaRepresentation.PersistedAnnotations> {
+  document: SchemaRepresentation.MultiDocument
+): SchemaRepresentation.MultiDocument {
   const representations = projectArray(
     document.representations,
     ["representations"],
@@ -480,19 +487,19 @@ export function projectMultiDocument(
   const references = projectReferences(document.references, ["references"])
   return {
     representations: representations as readonly [
-      SchemaRepresentation.PersistedRepresentation,
-      ...Array<SchemaRepresentation.PersistedRepresentation>
+      SchemaRepresentation.Representation,
+      ...Array<SchemaRepresentation.Representation>
     ],
     references
   }
 }
 
-export type PersistedRepresentation = SchemaRepresentation.PersistedRepresentation
-export type PersistedCheck = SchemaRepresentation.Check<SchemaRepresentation.PersistedAnnotations>
-export type PersistedDocument = SchemaRepresentation.Document<SchemaRepresentation.PersistedAnnotations>
-export type PersistedMultiDocument = SchemaRepresentation.MultiDocument<SchemaRepresentation.PersistedAnnotations>
+type Representation = SchemaRepresentation.Representation
+type Check = SchemaRepresentation.Check
+type Document = SchemaRepresentation.Document
+type MultiDocument = SchemaRepresentation.MultiDocument
 
-type ImportedJsonSchemaRepresentation = Extract<PersistedRepresentation, {
+type ImportedJsonSchemaRepresentation = Extract<Representation, {
   readonly _tag:
     | "Reference"
     | "Suspend"
@@ -558,8 +565,8 @@ function jsonSchemaReferenceKey($ref: string): string | undefined {
 function jsonSchemaFilter(
   id: string,
   payload: Schema.Json,
-  schemas?: ReadonlyArray<PersistedRepresentation>
-): PersistedCheck {
+  schemas?: ReadonlyArray<Representation>
+): Check {
   return {
     _tag: "Filter",
     aborted: false,
@@ -575,7 +582,7 @@ function jsonSchemaFilter(
 
 function jsonSchemaAnnotations(
   schema: JsonSchema.JsonSchema
-): SchemaRepresentation.PersistedAnnotations["node"] | undefined {
+): NodeAnnotations | undefined {
   const annotations: Record<string, Schema.Json> = {}
   if (typeof schema.title === "string") annotations.title = schema.title
   if (typeof schema.description === "string") annotations.description = schema.description
@@ -590,7 +597,7 @@ function jsonSchemaAnnotations(
 
 function annotateJsonSchemaRepresentation(
   representation: ImportedJsonSchemaRepresentation,
-  annotations: SchemaRepresentation.PersistedAnnotations["node"] | undefined
+  annotations: NodeAnnotations | undefined
 ): ImportedJsonSchemaRepresentation {
   if (annotations === undefined) {
     return representation
@@ -613,8 +620,8 @@ function annotateJsonSchemaRepresentation(
 }
 
 function jsonDeclaration(
-  annotations: SchemaRepresentation.PersistedAnnotations["node"] | undefined
-): PersistedRepresentation {
+  annotations: NodeAnnotations | undefined
+): Representation {
   return {
     _tag: "Declaration",
     annotations: {
@@ -630,7 +637,7 @@ function jsonDeclaration(
   }
 }
 
-function unknownJsonSchemas(representation: PersistedRepresentation): PersistedRepresentation {
+function unknownJsonSchemas(representation: Representation): Representation {
   switch (representation._tag) {
     case "Unknown":
       return jsonDeclaration(representation.annotations)
@@ -669,7 +676,7 @@ function unknownJsonSchemas(representation: PersistedRepresentation): PersistedR
   }
 }
 
-function unknownJsonSchemaCheck(check: PersistedCheck): PersistedCheck {
+function unknownJsonSchemaCheck(check: Check): Check {
   const annotations = check.annotations
   const representation = annotations?.representation
   const schemas = representation?.schemas
@@ -692,7 +699,7 @@ function translateJsonSchemaMultiDocument(
   document: JsonSchema.MultiDocument<"draft-2020-12">,
   options?: SchemaRepresentation.FromJsonSchemaOptions,
   singleRoot = false
-): PersistedMultiDocument {
+): MultiDocument {
   const definitionCache = new Map<string, ImportedJsonSchemaRepresentation>()
   const definitionsInProgress = new Set<string>()
 
@@ -736,14 +743,14 @@ function translateJsonSchemaMultiDocument(
 
   function annotationsOf(
     representation: ImportedJsonSchemaRepresentation
-  ): SchemaRepresentation.PersistedAnnotations["node"] | undefined {
+  ): NodeAnnotations | undefined {
     return representation._tag === "Reference" ? undefined : representation.annotations
   }
 
   function mergeAnnotations(
-    left: SchemaRepresentation.PersistedAnnotations["node"] | undefined,
-    right: SchemaRepresentation.PersistedAnnotations["node"] | undefined
-  ): SchemaRepresentation.PersistedAnnotations["node"] | undefined {
+    left: NodeAnnotations | undefined,
+    right: NodeAnnotations | undefined
+  ): NodeAnnotations | undefined {
     if (left === undefined) return right
     if (right === undefined) return left
     return { ...left, ...right }
@@ -761,15 +768,15 @@ function translateJsonSchemaMultiDocument(
   }
 
   function hasOrdinaryCheckAnnotations(
-    annotations: SchemaRepresentation.PersistedAnnotations["filter"] | undefined
+    annotations: FilterAnnotations | undefined
   ): boolean {
     return annotations !== undefined && Object.keys(annotations).some((key) => key !== "representation")
   }
 
   function asChecks(
-    checks: ReadonlyArray<PersistedCheck>,
-    annotations: SchemaRepresentation.PersistedAnnotations["node"] | undefined
-  ): ReadonlyArray<PersistedCheck> | undefined {
+    checks: ReadonlyArray<Check>,
+    annotations: NodeAnnotations | undefined
+  ): ReadonlyArray<Check> | undefined {
     if (checks.length === 0) return undefined
     if (annotations === undefined) return checks
     if (checks.length === 1 && !hasOrdinaryCheckAnnotations(checks[0].annotations)) {
@@ -783,29 +790,29 @@ function translateJsonSchemaMultiDocument(
     }
     return [{
       _tag: "FilterGroup",
-      checks: checks as [PersistedCheck, ...Array<PersistedCheck>],
+      checks: checks as [Check, ...Array<Check>],
       annotations
     }]
   }
 
   function combineChecks(
-    left: ReadonlyArray<PersistedCheck>,
-    right: ReadonlyArray<PersistedCheck>,
-    annotations: SchemaRepresentation.PersistedAnnotations["node"] | undefined
-  ): ReadonlyArray<PersistedCheck> | undefined {
+    left: ReadonlyArray<Check>,
+    right: ReadonlyArray<Check>,
+    annotations: NodeAnnotations | undefined
+  ): ReadonlyArray<Check> | undefined {
     const checks = asChecks(right, annotations)
     return checks === undefined ? undefined : [...left, ...checks]
   }
 
-  function checkId(check: PersistedCheck): string | undefined {
+  function checkId(check: Check): string | undefined {
     return check._tag === "Filter" ? check.annotations?.representation?.id : undefined
   }
 
   function combineNumberChecks(
-    left: ReadonlyArray<PersistedCheck>,
-    right: ReadonlyArray<PersistedCheck>,
-    annotations: SchemaRepresentation.PersistedAnnotations["node"] | undefined
-  ): ReadonlyArray<PersistedCheck> | undefined {
+    left: ReadonlyArray<Check>,
+    right: ReadonlyArray<Check>,
+    annotations: NodeAnnotations | undefined
+  ): ReadonlyArray<Check> | undefined {
     if (left.some((check) => checkId(check) === "effect/schema/isFinite")) {
       right = right.filter((check) => checkId(check) !== "effect/schema/isFinite")
     }
@@ -816,17 +823,17 @@ function translateJsonSchemaMultiDocument(
   }
 
   function combineArrayChecks(
-    left: ReadonlyArray<PersistedCheck>,
-    right: ReadonlyArray<PersistedCheck>,
-    annotations: SchemaRepresentation.PersistedAnnotations["node"] | undefined
-  ): ReadonlyArray<PersistedCheck> | undefined {
+    left: ReadonlyArray<Check>,
+    right: ReadonlyArray<Check>,
+    annotations: NodeAnnotations | undefined
+  ): ReadonlyArray<Check> | undefined {
     if (left.some((check) => checkId(check) === "effect/schema/isUnique")) {
       right = right.filter((check) => checkId(check) !== "effect/schema/isUnique")
     }
     return combineChecks(left, right, annotations)
   }
 
-  function satisfiesPrimitiveCheck(check: PersistedCheck, value: string | number): boolean | undefined {
+  function satisfiesPrimitiveCheck(check: Check, value: string | number): boolean | undefined {
     if (check._tag === "FilterGroup") {
       return check.checks.every((check) => satisfiesPrimitiveCheck(check, value))
     }
@@ -858,9 +865,9 @@ function translateJsonSchemaMultiDocument(
 
   function satisfiesLiteral(
     representation:
-      | SchemaRepresentation.String<SchemaRepresentation.PersistedAnnotations>
-      | SchemaRepresentation.Number<SchemaRepresentation.PersistedAnnotations>,
-    literal: SchemaRepresentation.Literal<SchemaRepresentation.PersistedAnnotations>
+      | SchemaRepresentation.String
+      | SchemaRepresentation.Number,
+    literal: SchemaRepresentation.Literal
   ): boolean {
     const value = literal.literal
     if (representation._tag === "String" ? typeof value !== "string" : typeof value !== "number") {
@@ -870,11 +877,11 @@ function translateJsonSchemaMultiDocument(
   }
 
   function combineArrays(
-    left: SchemaRepresentation.Arrays<SchemaRepresentation.PersistedAnnotations>,
-    right: SchemaRepresentation.Arrays<SchemaRepresentation.PersistedAnnotations>,
+    left: SchemaRepresentation.Arrays,
+    right: SchemaRepresentation.Arrays,
     path: Path
-  ): Pick<SchemaRepresentation.Arrays<SchemaRepresentation.PersistedAnnotations>, "elements" | "rest"> | undefined {
-    const elements: Array<SchemaRepresentation.Element<SchemaRepresentation.PersistedAnnotations>> = []
+  ): Pick<SchemaRepresentation.Arrays, "elements" | "rest"> | undefined {
+    const elements: Array<SchemaRepresentation.Element> = []
     const length = Math.max(left.elements.length, right.elements.length)
     for (let index = 0; index < length; index++) {
       const leftElement = left.elements[index]
@@ -913,10 +920,10 @@ function translateJsonSchemaMultiDocument(
   }
 
   function combineProperties(
-    left: ReadonlyArray<SchemaRepresentation.PropertySignature<SchemaRepresentation.PersistedAnnotations>>,
-    right: ReadonlyArray<SchemaRepresentation.PropertySignature<SchemaRepresentation.PersistedAnnotations>>,
+    left: ReadonlyArray<SchemaRepresentation.PropertySignature>,
+    right: ReadonlyArray<SchemaRepresentation.PropertySignature>,
     path: Path
-  ): Array<SchemaRepresentation.PropertySignature<SchemaRepresentation.PersistedAnnotations>> {
+  ): Array<SchemaRepresentation.PropertySignature> {
     const rightByName = new Map(right.map((property) => [property.name, property]))
     const names = new Set<PropertyKey | number>()
     const properties = left.map((property) => {
@@ -940,17 +947,17 @@ function translateJsonSchemaMultiDocument(
     return properties
   }
 
-  function isUnconstrainedString(representation: PersistedRepresentation): boolean {
+  function isUnconstrainedString(representation: Representation): boolean {
     return representation._tag === "String" && representation.checks.length === 0 &&
       representation.annotations === undefined && representation.contentMediaType === undefined &&
       representation.contentSchema === undefined
   }
 
   function combineIndexSignatures(
-    left: ReadonlyArray<SchemaRepresentation.IndexSignature<SchemaRepresentation.PersistedAnnotations>>,
-    right: ReadonlyArray<SchemaRepresentation.IndexSignature<SchemaRepresentation.PersistedAnnotations>>,
+    left: ReadonlyArray<SchemaRepresentation.IndexSignature>,
+    right: ReadonlyArray<SchemaRepresentation.IndexSignature>,
     path: Path
-  ): Array<SchemaRepresentation.IndexSignature<SchemaRepresentation.PersistedAnnotations>> {
+  ): Array<SchemaRepresentation.IndexSignature> {
     if (left.length === 0 || right.length === 0) return []
     const signatures = [...left]
     for (const signature of right) {
@@ -1310,8 +1317,8 @@ function translateJsonSchemaMultiDocument(
     }
   }
 
-  function collectStringChecks(schema: JsonSchema.JsonSchema): Array<PersistedCheck> {
-    const checks: Array<PersistedCheck> = []
+  function collectStringChecks(schema: JsonSchema.JsonSchema): Array<Check> {
+    const checks: Array<Check> = []
     if (typeof schema.minLength === "number") {
       checks.push(jsonSchemaFilter("effect/schema/isMinLength", { minLength: schema.minLength }))
     }
@@ -1324,8 +1331,8 @@ function translateJsonSchemaMultiDocument(
     return checks
   }
 
-  function collectNumberChecks(schema: JsonSchema.JsonSchema): Array<PersistedCheck> {
-    const checks: Array<PersistedCheck> = []
+  function collectNumberChecks(schema: JsonSchema.JsonSchema): Array<Check> {
+    const checks: Array<Check> = []
     if (typeof schema.minimum === "number") {
       checks.push(jsonSchemaFilter("effect/schema/isGreaterThanOrEqualTo", { minimum: schema.minimum }))
     }
@@ -1344,8 +1351,8 @@ function translateJsonSchemaMultiDocument(
     return checks
   }
 
-  function collectArrayChecks(schema: JsonSchema.JsonSchema): Array<PersistedCheck> {
-    const checks: Array<PersistedCheck> = []
+  function collectArrayChecks(schema: JsonSchema.JsonSchema): Array<Check> {
+    const checks: Array<Check> = []
     if (schema.prefixItems === undefined) {
       if (typeof schema.minItems === "number") {
         checks.push(jsonSchemaFilter("effect/schema/isMinLength", { minLength: schema.minItems }))
@@ -1363,7 +1370,7 @@ function translateJsonSchemaMultiDocument(
   function collectProperties(
     schema: JsonSchema.JsonSchema,
     path: Path
-  ): Array<SchemaRepresentation.PropertySignature<SchemaRepresentation.PersistedAnnotations>> {
+  ): Array<SchemaRepresentation.PropertySignature> {
     const properties =
       typeof schema.properties === "object" && schema.properties !== null && !Array.isArray(schema.properties)
         ? schema.properties as Record<string, unknown>
@@ -1383,8 +1390,8 @@ function translateJsonSchemaMultiDocument(
   function collectIndexSignatures(
     schema: JsonSchema.JsonSchema,
     path: Path
-  ): Array<SchemaRepresentation.IndexSignature<SchemaRepresentation.PersistedAnnotations>> {
-    const signatures: Array<SchemaRepresentation.IndexSignature<SchemaRepresentation.PersistedAnnotations>> = []
+  ): Array<SchemaRepresentation.IndexSignature> {
+    const signatures: Array<SchemaRepresentation.IndexSignature> = []
     if (
       typeof schema.patternProperties === "object" &&
       schema.patternProperties !== null &&
@@ -1417,8 +1424,8 @@ function translateJsonSchemaMultiDocument(
   function collectObjectChecks(
     schema: JsonSchema.JsonSchema,
     path: Path
-  ): Array<PersistedCheck> {
-    const checks: Array<PersistedCheck> = []
+  ): Array<Check> {
+    const checks: Array<Check> = []
     if (typeof schema.minProperties === "number") {
       checks.push(jsonSchemaFilter("effect/schema/isMinProperties", { minProperties: schema.minProperties }))
     }
@@ -1435,13 +1442,13 @@ function translateJsonSchemaMultiDocument(
     return checks
   }
 
-  const references: Record<string, PersistedRepresentation> = {}
+  const references: Record<string, Representation> = {}
   for (const key of Object.keys(document.definitions)) {
     InternalRecord.set(references, key, unknownJsonSchemas(translateDefinition(key, ["definitions", key])))
   }
   const representations = document.schemas.map((schema, index) =>
     unknownJsonSchemas(recur(schema, singleRoot ? ["schema"] : ["schemas", index]))
-  ) as [PersistedRepresentation, ...Array<PersistedRepresentation>]
+  ) as [Representation, ...Array<Representation>]
   return { representations, references }
 }
 
@@ -1449,7 +1456,7 @@ function translateJsonSchemaMultiDocument(
 export function fromJsonSchemaDocument(
   document: JsonSchema.Document<"draft-2020-12">,
   options?: SchemaRepresentation.FromJsonSchemaOptions
-): PersistedDocument {
+): Document {
   const translated = translateJsonSchemaMultiDocument(
     {
       dialect: document.dialect,
@@ -1469,7 +1476,7 @@ export function fromJsonSchemaDocument(
 export function fromJsonSchemaMultiDocument(
   document: JsonSchema.MultiDocument<"draft-2020-12">,
   options?: SchemaRepresentation.FromJsonSchemaOptions
-): PersistedMultiDocument {
+): MultiDocument {
   return translateJsonSchemaMultiDocument(document, options)
 }
 
@@ -1633,11 +1640,11 @@ function appendJsonSchema(
 
 function compileJsonSchema(
   representations: readonly [
-    SchemaRepresentation.LiveRepresentation,
-    ...Array<SchemaRepresentation.LiveRepresentation>
+    SchemaRepresentation.Representation,
+    ...Array<SchemaRepresentation.Representation>
   ],
   rootPaths: ReadonlyArray<Path>,
-  references: SchemaRepresentation.References<SchemaRepresentation.LiveAnnotations>,
+  references: SchemaRepresentation.References,
   options: Schema.ToJsonSchemaOptions | undefined
 ): JsonSchema.MultiDocument<"draft-2020-12"> {
   const definitions: Record<string, JsonSchema.JsonSchema> = {}
@@ -1652,14 +1659,14 @@ function compileJsonSchema(
     path: Path
   ): ReadonlyArray<JsonSchema.JsonSchema> {
     const representation = getDataAnnotation(annotations, "representation") as
-      | SchemaRepresentation.RepresentationAnnotation<SchemaRepresentation.LiveRepresentation>
+      | SchemaRepresentation.RepresentationAnnotation<SchemaRepresentation.Representation>
       | undefined
     const schemas = representation?.schemas ?? []
     return schemas.map((schema, index) => recur(schema, [...path, "representation", "schemas", index]))
   }
 
   function compileCheck(
-    check: SchemaRepresentation.Check<SchemaRepresentation.LiveAnnotations>,
+    check: SchemaRepresentation.Check,
     type: JsonSchema.Type | undefined,
     path: Path
   ): JsonSchema.JsonSchema | undefined {
@@ -1685,7 +1692,7 @@ function compileJsonSchema(
   }
 
   function recur(
-    representation: SchemaRepresentation.LiveRepresentation,
+    representation: SchemaRepresentation.Representation,
     path: Path
   ): JsonSchema.JsonSchema {
     if (representation._tag === "Reference") {
@@ -1711,7 +1718,7 @@ function compileJsonSchema(
   }
 
   function on(
-    representation: Exclude<SchemaRepresentation.LiveRepresentation, SchemaRepresentation.Reference>,
+    representation: Exclude<SchemaRepresentation.Representation, SchemaRepresentation.Reference>,
     path: Path
   ): JsonSchema.JsonSchema {
     switch (representation._tag) {
@@ -1878,7 +1885,7 @@ function compileJsonSchema(
   }
 
   function getParameterPatterns(
-    parameter: SchemaRepresentation.LiveRepresentation,
+    parameter: SchemaRepresentation.Representation,
     path: Path,
     seenReferences: ReadonlySet<string>
   ): ReadonlyArray<string> {
@@ -1944,7 +1951,7 @@ function collectPatterns(schema: JsonSchema.JsonSchema): ReadonlyArray<string> {
   return patterns
 }
 
-function getPartPattern(part: SchemaRepresentation.LiveRepresentation): string {
+function getPartPattern(part: SchemaRepresentation.Representation): string {
   switch (part._tag) {
     case "Literal":
       return RegEx.escape(globalThis.String(part.literal))
@@ -1963,7 +1970,7 @@ function getPartPattern(part: SchemaRepresentation.LiveRepresentation): string {
 
 /** @internal */
 export function toJsonSchemaDocument(
-  document: SchemaRepresentation.Document<SchemaRepresentation.LiveAnnotations>,
+  document: SchemaRepresentation.Document,
   options?: Schema.ToJsonSchemaOptions
 ): JsonSchema.Document<"draft-2020-12"> {
   const output = compileJsonSchema(
@@ -1981,7 +1988,7 @@ export function toJsonSchemaDocument(
 
 /** @internal */
 export function toJsonSchemaMultiDocument(
-  document: SchemaRepresentation.MultiDocument<SchemaRepresentation.LiveAnnotations>,
+  document: SchemaRepresentation.MultiDocument,
   options?: Schema.ToJsonSchemaOptions
 ): JsonSchema.MultiDocument<"draft-2020-12"> {
   return compileJsonSchema(
@@ -2118,20 +2125,20 @@ function renderLiteral(value: string | number | boolean | bigint): string {
 }
 
 function isSimpleLiveLiteral(
-  representation: SchemaRepresentation.LiveRepresentation
-): representation is SchemaRepresentation.Literal<SchemaRepresentation.LiveAnnotations> {
+  representation: SchemaRepresentation.Representation
+): representation is SchemaRepresentation.Literal {
   return representation._tag === "Literal" && representation.checks.length === 0 &&
     representation.annotations === undefined
 }
 
-function toTypeParts(parts: ReadonlyArray<SchemaRepresentation.LiveRepresentation>): ReadonlyArray<string> {
+function toTypeParts(parts: ReadonlyArray<SchemaRepresentation.Representation>): ReadonlyArray<string> {
   if (parts.length === 0) return [""]
   const [first, ...rest] = parts
   const suffixes = toTypeParts(rest)
   return toTypePart(first).flatMap((prefix) => suffixes.map((suffix) => prefix + suffix))
 }
 
-function toTypePart(part: SchemaRepresentation.LiveRepresentation): ReadonlyArray<string> {
+function toTypePart(part: SchemaRepresentation.Representation): ReadonlyArray<string> {
   switch (part._tag) {
     case "Literal":
       return [globalThis.String(part.literal)]
@@ -2153,31 +2160,31 @@ function toTypePart(part: SchemaRepresentation.LiveRepresentation): ReadonlyArra
 export interface TopologicalSort {
   readonly nonRecursives: ReadonlyArray<{
     readonly $ref: string
-    readonly representation: SchemaRepresentation.LiveRepresentation
+    readonly representation: SchemaRepresentation.Representation
   }>
-  readonly recursives: Readonly<Record<string, SchemaRepresentation.LiveRepresentation>>
+  readonly recursives: Readonly<Record<string, SchemaRepresentation.Representation>>
 }
 
 export function topologicalSort(
-  references: SchemaRepresentation.References<SchemaRepresentation.LiveAnnotations>
+  references: SchemaRepresentation.References
 ): TopologicalSort {
   const identifiers = Object.keys(references)
   const identifierSet = new Set(identifiers)
 
-  function collectRefs(root: SchemaRepresentation.LiveRepresentation): ReadonlySet<string> {
+  function collectRefs(root: SchemaRepresentation.Representation): ReadonlySet<string> {
     const refs = new Set<string>()
     const visited = new WeakSet<object>()
-    const stack: Array<SchemaRepresentation.LiveRepresentation> = [root]
+    const stack: Array<SchemaRepresentation.Representation> = [root]
 
     function pushAnnotationSchemas(annotations: Schema.Annotations.Annotations | undefined): void {
       const representation = getDataAnnotation(annotations, "representation") as
-        | SchemaRepresentation.RepresentationAnnotation<SchemaRepresentation.LiveRepresentation>
+        | SchemaRepresentation.RepresentationAnnotation<SchemaRepresentation.Representation>
         | undefined
       if (representation?.schemas !== undefined) stack.push(...representation.schemas)
     }
 
     function pushChecks(
-      checks: ReadonlyArray<SchemaRepresentation.Check<SchemaRepresentation.LiveAnnotations>>
+      checks: ReadonlyArray<SchemaRepresentation.Check>
     ): void {
       for (const check of checks) {
         pushAnnotationSchemas(check.annotations)
@@ -2277,7 +2284,7 @@ export function topologicalSort(
   }
   const nonRecursives: Array<{
     readonly $ref: string
-    readonly representation: SchemaRepresentation.LiveRepresentation
+    readonly representation: SchemaRepresentation.Representation
   }> = []
   for (let index = 0; index < queue.length; index++) {
     const $ref = queue[index]
@@ -2288,13 +2295,13 @@ export function topologicalSort(
       if (degree === 0) queue.push(dependent)
     }
   }
-  const recursives: Record<string, SchemaRepresentation.LiveRepresentation> = {}
+  const recursives: Record<string, SchemaRepresentation.Representation> = {}
   for (const identifier of recursive) recursives[identifier] = references[identifier]
   return { nonRecursives, recursives }
 }
 
 function compileCodeDocument(
-  document: SchemaRepresentation.MultiDocument<SchemaRepresentation.LiveAnnotations>
+  document: SchemaRepresentation.MultiDocument
 ): SchemaRepresentation.CodeDocument {
   const artifacts: Array<SchemaRepresentation.Artifact> = []
   const sorted = topologicalSort(document.references)
@@ -2366,7 +2373,7 @@ function compileCodeDocument(
     return identifier
   }
 
-  function addEnum(representation: SchemaRepresentation.Enum<SchemaRepresentation.LiveAnnotations>): string {
+  function addEnum(representation: SchemaRepresentation.Enum): string {
     const identifier = freshIdentifier("_Enum")
     artifacts.push({
       _tag: "Enum",
@@ -2386,14 +2393,14 @@ function compileCodeDocument(
     path: Path
   ): ReadonlyArray<SchemaRepresentation.Code> {
     const representation = getDataAnnotation(annotations, "representation") as
-      | SchemaRepresentation.RepresentationAnnotation<SchemaRepresentation.LiveRepresentation>
+      | SchemaRepresentation.RepresentationAnnotation<SchemaRepresentation.Representation>
       | undefined
     const schemas = representation?.schemas ?? []
     return schemas.map((schema, index) => recur(schema, [...path, "representation", "schemas", index]))
   }
 
   function checkBrands(
-    check: SchemaRepresentation.Check<SchemaRepresentation.LiveAnnotations>
+    check: SchemaRepresentation.Check
   ): ReadonlyArray<string> {
     const own = InternalAnnotations.collectBrands(check.annotations)
     if (
@@ -2426,7 +2433,7 @@ function compileCodeDocument(
   }
 
   function compileCheck(
-    check: SchemaRepresentation.Check<SchemaRepresentation.LiveAnnotations>,
+    check: SchemaRepresentation.Check,
     path: Path
   ): string {
     const callback = getDataAnnotation(check.annotations, "generation")
@@ -2451,7 +2458,7 @@ function compileCodeDocument(
 
   function applyNode(
     base: SchemaRepresentation.Code,
-    representation: Exclude<SchemaRepresentation.LiveRepresentation, SchemaRepresentation.Reference>,
+    representation: Exclude<SchemaRepresentation.Representation, SchemaRepresentation.Reference>,
     path: Path,
     includeTypeBrands: boolean = true
   ): SchemaRepresentation.Code {
@@ -2468,7 +2475,7 @@ function compileCodeDocument(
   }
 
   function recurString(
-    representation: SchemaRepresentation.String<SchemaRepresentation.LiveAnnotations>,
+    representation: SchemaRepresentation.String,
     path: Path
   ): SchemaRepresentation.Code {
     const contentSchema = representation.contentSchema === undefined
@@ -2503,7 +2510,7 @@ function compileCodeDocument(
   }
 
   function recur(
-    representation: SchemaRepresentation.LiveRepresentation,
+    representation: SchemaRepresentation.Representation,
     path: Path
   ): SchemaRepresentation.Code {
     if (representation._tag === "Reference") {
@@ -2519,8 +2526,8 @@ function compileCodeDocument(
 
   function on(
     representation: Exclude<
-      SchemaRepresentation.LiveRepresentation,
-      SchemaRepresentation.Reference | SchemaRepresentation.String<SchemaRepresentation.LiveAnnotations>
+      SchemaRepresentation.Representation,
+      SchemaRepresentation.Reference | SchemaRepresentation.String
     >,
     path: Path
   ): SchemaRepresentation.Code {
@@ -2688,7 +2695,7 @@ function compileCodeDocument(
 
 /** @internal */
 export function toCodeDocument(
-  document: SchemaRepresentation.MultiDocument<SchemaRepresentation.LiveAnnotations>
+  document: SchemaRepresentation.MultiDocument
 ): SchemaRepresentation.CodeDocument {
   return compileCodeDocument(document)
 }
@@ -2708,7 +2715,7 @@ export function toCodeDocumentFromSchemaMultiDocument(
 }
 
 /** @internal */
-export function fromAST(ast: SchemaAST.AST): SchemaRepresentation.Document<SchemaRepresentation.LiveAnnotations> {
+export function fromAST(ast: SchemaAST.AST): SchemaRepresentation.Document {
   const { references, representations } = fromASTs([ast])
   return { representation: representations[0], references }
 }
@@ -2716,7 +2723,7 @@ export function fromAST(ast: SchemaAST.AST): SchemaRepresentation.Document<Schem
 /** @internal */
 export function fromEncodedAST(
   ast: SchemaAST.AST
-): SchemaRepresentation.Document<SchemaRepresentation.LiveAnnotations> {
+): SchemaRepresentation.Document {
   const { references, representations } = fromEncodedASTs([ast])
   return { representation: representations[0], references }
 }
@@ -2724,14 +2731,14 @@ export function fromEncodedAST(
 /** @internal */
 export function fromEncodedASTs(
   asts: readonly [SchemaAST.AST, ...Array<SchemaAST.AST>]
-): SchemaRepresentation.MultiDocument<SchemaRepresentation.LiveAnnotations> {
+): SchemaRepresentation.MultiDocument {
   return lowerASTs(asts, [], true)
 }
 
 /** @internal */
 export function fromASTs(
   asts: readonly [SchemaAST.AST, ...Array<SchemaAST.AST>]
-): SchemaRepresentation.MultiDocument<SchemaRepresentation.LiveAnnotations> {
+): SchemaRepresentation.MultiDocument {
   return lowerASTs(Arr.map(asts, (ast) => SchemaAST.toType(ast)), [])
 }
 
@@ -2746,8 +2753,8 @@ function lowerASTs(
   asts: readonly [SchemaAST.AST, ...Array<SchemaAST.AST>],
   externalDefinitions: ReadonlyArray<ExternalDefinition>,
   encoded = false
-): SchemaRepresentation.MultiDocument<SchemaRepresentation.LiveAnnotations> {
-  const references: Record<string, SchemaRepresentation.LiveRepresentation> = {}
+): SchemaRepresentation.MultiDocument {
+  const references: Record<string, SchemaRepresentation.Representation> = {}
   const referenceMap = new Map<SchemaAST.AST, string>()
   const uniqueReferences = new Set(externalDefinitions.map((definition) => definition.key))
   const visiting = new Set<SchemaAST.AST>()
@@ -2784,7 +2791,7 @@ function lowerASTs(
     ast: SchemaAST.AST,
     ownedReference?: string,
     inheritedIdentifier?: string
-  ): SchemaRepresentation.LiveRepresentation {
+  ): SchemaRepresentation.Representation {
     let found = referenceMap.get(ast)
     if (found === undefined && SchemaAST.isSuspend(ast)) {
       const bodyReference = externalBodyReferences.get(ast.thunk())
@@ -2839,7 +2846,7 @@ function lowerASTs(
     return representation
   }
 
-  function on(ast: SchemaAST.AST): SchemaRepresentation.LiveRepresentation {
+  function on(ast: SchemaAST.AST): SchemaRepresentation.Representation {
     switch (ast._tag) {
       case "Declaration":
         return {
@@ -2963,13 +2970,13 @@ function lowerASTs(
 
   function fromChecks(
     checks: readonly [SchemaAST.Check<any>, ...Array<SchemaAST.Check<any>>] | undefined
-  ): Array<SchemaRepresentation.Check<SchemaRepresentation.LiveAnnotations>> {
+  ): Array<SchemaRepresentation.Check> {
     return checks?.map(fromCheck) ?? []
   }
 
   function fromCheck(
     check: SchemaAST.Check<any>
-  ): SchemaRepresentation.Check<SchemaRepresentation.LiveAnnotations> {
+  ): SchemaRepresentation.Check {
     switch (check._tag) {
       case "Filter":
         return {
@@ -2989,28 +2996,28 @@ function lowerASTs(
   function fromNodeAnnotations(
     annotations: Schema.Annotations.Annotations | undefined,
     stripStringContent: boolean = false
-  ): { readonly annotations: SchemaRepresentation.LiveAnnotations["node"] } | undefined {
+  ): { readonly annotations: NodeAnnotations } | undefined {
     const converted = convertRepresentationSchemas(annotations, stripStringContent)
     return converted === undefined ? undefined : { annotations: converted }
   }
 
   function fromFilterAnnotations(
     annotations: Schema.Annotations.Filter | undefined
-  ): { readonly annotations: SchemaRepresentation.LiveAnnotations["filter"] } | undefined {
+  ): { readonly annotations: FilterAnnotations } | undefined {
     const converted = convertRepresentationSchemas(annotations, false)
     return converted === undefined ? undefined : { annotations: converted }
   }
 
   function fromKeyAnnotations(
     annotations: Schema.Annotations.Key<unknown> | undefined
-  ): { readonly annotations: SchemaRepresentation.LiveAnnotations["key"] } | undefined {
+  ): { readonly annotations: KeyAnnotations } | undefined {
     return annotations === undefined ? undefined : { annotations }
   }
 
   function convertRepresentationSchemas<A extends Schema.Annotations.Annotations>(
     annotations: A | undefined,
     stripStringContent: boolean
-  ): SchemaRepresentation.RebindRepresentation<A, SchemaRepresentation.LiveRepresentation> | undefined {
+  ): RebindRepresentation<A> | undefined {
     if (annotations === undefined) {
       return undefined
     }
@@ -3034,6 +3041,6 @@ function lowerASTs(
       out = rest
     }
 
-    return out as SchemaRepresentation.RebindRepresentation<A, SchemaRepresentation.LiveRepresentation>
+    return out as RebindRepresentation<A>
   }
 }

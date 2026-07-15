@@ -195,7 +195,7 @@ describe("SchemaRepresentation2 built-in Cause and Exit declarations", () => {
   })
 
   it("persists Exit as a compact declaration instead of duplicating its encoded tree", () => {
-    const persisted = Schema.decodeUnknownSync(SchemaRepresentation2.PersistedDocumentFromJson)(
+    const persisted = Schema.decodeUnknownSync(SchemaRepresentation2.DocumentFromJson)(
       SchemaRepresentation2.toJson(
         SchemaRepresentation2.fromAST(Schema.Exit(Schema.String, Schema.Number, Schema.Boolean).ast)
       )

@@ -18,14 +18,17 @@ import {
 
 type Path = ReadonlyArray<string | number>
 
-type PersistedRepresentation = SchemaRepresentation.PersistedRepresentation
-type PersistedCheck = SchemaRepresentation.Check<SchemaRepresentation.PersistedAnnotations>
-type PersistedDocument = SchemaRepresentation.Document<SchemaRepresentation.PersistedAnnotations>
-type PersistedMultiDocument = SchemaRepresentation.MultiDocument<SchemaRepresentation.PersistedAnnotations>
+type Representation = SchemaRepresentation.Representation
+type Check = SchemaRepresentation.Check
+type Document = SchemaRepresentation.Document
+type MultiDocument = SchemaRepresentation.MultiDocument
+type NodeAnnotations = SchemaRepresentation.Declaration["annotations"]
+type FilterAnnotations = SchemaRepresentation.Filter["annotations"]
+type RepresentationAnnotation = SchemaRepresentation.RepresentationAnnotation<Representation>
 
 type PersistedCodecs = {
-  readonly document: Schema.Codec<PersistedDocument, Schema.Json>
-  readonly multiDocument: Schema.Codec<PersistedMultiDocument, Schema.Json>
+  readonly document: Schema.Codec<Document, Schema.Json>
+  readonly multiDocument: Schema.Codec<MultiDocument, Schema.Json>
 }
 
 function makePersistedCodecs(): PersistedCodecs {
@@ -103,8 +106,8 @@ function makePersistedCodecs(): PersistedCodecs {
     })
   )
 
-  type RepresentationCodec = Schema.Codec<PersistedRepresentation, Schema.Json>
-  type CheckCodec = Schema.Codec<PersistedCheck, Schema.Json>
+  type RepresentationCodec = Schema.Codec<Representation, Schema.Json>
+  type CheckCodec = Schema.Codec<Check, Schema.Json>
 
   let RepresentationFromJson: RepresentationCodec
   const RepresentationRef = Schema.suspend((): RepresentationCodec => RepresentationFromJson) as RepresentationCodec
@@ -116,7 +119,7 @@ function makePersistedCodecs(): PersistedCodecs {
   })
 
   const OrdinaryAnnotationsFromJson = Schema.Record(Schema.String, Schema.Json) as unknown as Schema.Codec<
-    SchemaRepresentation.PersistedOrdinaryAnnotations,
+    NonNullable<SchemaRepresentation.Element["annotations"]>,
     Schema.JsonObject
   >
   const OpaqueAnnotationsFromJson = Schema.StructWithRest(
@@ -125,7 +128,7 @@ function makePersistedCodecs(): PersistedCodecs {
     }),
     [Schema.Record(Schema.String, Schema.Json)]
   ) as unknown as Schema.Codec<
-    SchemaRepresentation.PersistedOpaqueAnnotations<PersistedRepresentation>,
+    NonNullable<NodeAnnotations>,
     Schema.JsonObject
   >
 
@@ -143,7 +146,7 @@ function makePersistedCodecs(): PersistedCodecs {
   })
   CheckFromJson = Schema.Union([FilterFromJson, FilterGroupFromJson]) as unknown as CheckCodec
 
-  function keywordFromJson<Tag extends Exclude<PersistedRepresentation["_tag"], "Reference">>(tag: Tag) {
+  function keywordFromJson<Tag extends Exclude<Representation["_tag"], "Reference">>(tag: Tag) {
     return Schema.Struct({
       _tag: Schema.tag(tag),
       annotations: Schema.optional(OpaqueAnnotationsFromJson),
@@ -277,11 +280,11 @@ function makePersistedCodecs(): PersistedCodecs {
   const PersistedDocumentWire = Schema.Struct({
     representation: RepresentationRef,
     references: Schema.Record(Schema.String, RepresentationRef)
-  }) as unknown as Schema.Codec<PersistedDocument, Schema.Json>
+  }) as unknown as Schema.Codec<Document, Schema.Json>
   const PersistedMultiDocumentWire = Schema.Struct({
     representations: Schema.NonEmptyArray(RepresentationRef),
     references: Schema.Record(Schema.String, RepresentationRef)
-  }) as unknown as Schema.Codec<PersistedMultiDocument, Schema.Json>
+  }) as unknown as Schema.Codec<MultiDocument, Schema.Json>
 
   function exactParseOptions(options: SchemaAST.ParseOptions): SchemaAST.ParseOptions {
     return { ...options, onExcessProperty: "error" }
@@ -316,12 +319,12 @@ function getPersistedCodecs(): PersistedCodecs {
 }
 
 /** @internal */
-export function getPersistedDocumentFromJson(): Schema.Codec<PersistedDocument, Schema.Json> {
+export function getPersistedDocumentFromJson(): Schema.Codec<Document, Schema.Json> {
   return getPersistedCodecs().document
 }
 
 /** @internal */
-export function getPersistedMultiDocumentFromJson(): Schema.Codec<PersistedMultiDocument, Schema.Json> {
+export function getPersistedMultiDocumentFromJson(): Schema.Codec<MultiDocument, Schema.Json> {
   return getPersistedCodecs().multiDocument
 }
 
@@ -331,7 +334,7 @@ function encodeProjected<A>(codec: Schema.Codec<A, Schema.Json>, input: A): Sche
 
 /** @internal */
 export function toJson(
-  document: SchemaRepresentation.Document<SchemaRepresentation.LiveAnnotations>
+  document: SchemaRepresentation.Document
 ): Schema.Json {
   const projected = projectDocument(document)
   return encodeProjected(getPersistedCodecs().document, projected)
@@ -339,7 +342,7 @@ export function toJson(
 
 /** @internal */
 export function toJsonMultiDocument(
-  document: SchemaRepresentation.MultiDocument<SchemaRepresentation.LiveAnnotations>
+  document: SchemaRepresentation.MultiDocument
 ): Schema.Json {
   const projected = projectMultiDocument(document)
   return encodeProjected(getPersistedCodecs().multiDocument, projected)
@@ -391,12 +394,12 @@ function makeReviverMap(
 
 function getRepresentationAnnotation(
   annotations:
-    | SchemaRepresentation.PersistedAnnotations["node"]
-    | SchemaRepresentation.PersistedAnnotations["filter"]
+    | NodeAnnotations
+    | FilterAnnotations
     | undefined,
   path: Path,
   required: boolean
-): SchemaRepresentation.RepresentationAnnotation<SchemaRepresentation.PersistedRepresentation> | undefined {
+): RepresentationAnnotation | undefined {
   const representation = annotations?.representation
   if (representation === undefined && required) {
     throw errorWithPath("Missing representation annotation", path)
@@ -406,10 +409,10 @@ function getRepresentationAnnotation(
 
 function revivePersisted(
   representations: readonly [
-    SchemaRepresentation.PersistedRepresentation,
-    ...Array<SchemaRepresentation.PersistedRepresentation>
+    SchemaRepresentation.Representation,
+    ...Array<SchemaRepresentation.Representation>
   ],
-  references: SchemaRepresentation.References<SchemaRepresentation.PersistedAnnotations>,
+  references: SchemaRepresentation.References,
   reviverMap: ReadonlyMap<string, SchemaRepresentation.AnyReviver>,
   singleRoot: boolean
 ): SchemaRepresentation.SchemaMultiDocument {
@@ -421,22 +424,22 @@ function revivePersisted(
   }
 
   function resolveReviver(
-    representation: SchemaRepresentation.RepresentationAnnotation<SchemaRepresentation.PersistedRepresentation>,
+    representation: RepresentationAnnotation,
     expected: "Declaration",
     path: Path
   ): SchemaRepresentation.DeclarationReviver<any>
   function resolveReviver(
-    representation: SchemaRepresentation.RepresentationAnnotation<SchemaRepresentation.PersistedRepresentation>,
+    representation: RepresentationAnnotation,
     expected: "Filter",
     path: Path
   ): SchemaRepresentation.FilterReviver<any>
   function resolveReviver(
-    representation: SchemaRepresentation.RepresentationAnnotation<SchemaRepresentation.PersistedRepresentation>,
+    representation: RepresentationAnnotation,
     expected: "FilterGroup",
     path: Path
   ): SchemaRepresentation.FilterGroupReviver<any>
   function resolveReviver(
-    representation: SchemaRepresentation.RepresentationAnnotation<SchemaRepresentation.PersistedRepresentation>,
+    representation: RepresentationAnnotation,
     expected: "Declaration" | "Filter" | "FilterGroup",
     path: Path
   ): SchemaRepresentation.AnyReviver {
@@ -451,10 +454,10 @@ function revivePersisted(
   }
 
   function validateSchemasArity(
-    representation: SchemaRepresentation.RepresentationAnnotation<SchemaRepresentation.PersistedRepresentation>,
+    representation: RepresentationAnnotation,
     reviver: SchemaRepresentation.AnyReviver,
     path: Path
-  ): ReadonlyArray<SchemaRepresentation.PersistedRepresentation> {
+  ): ReadonlyArray<SchemaRepresentation.Representation> {
     const schemas = representation.schemas ?? []
     if (schemas.length !== reviver.schemasArity) {
       throw errorWithPath(
@@ -466,7 +469,7 @@ function revivePersisted(
   }
 
   function decodePayload(
-    representation: SchemaRepresentation.RepresentationAnnotation<SchemaRepresentation.PersistedRepresentation>,
+    representation: RepresentationAnnotation,
     reviver: SchemaRepresentation.AnyReviver,
     path: Path
   ): any {
@@ -478,7 +481,7 @@ function revivePersisted(
   }
 
   function reviveSchemas(
-    representations: ReadonlyArray<SchemaRepresentation.PersistedRepresentation>,
+    representations: ReadonlyArray<SchemaRepresentation.Representation>,
     path: Path
   ): ReadonlyArray<Schema.Top> {
     return representations.map((representation, index) => recur(representation, [...path, index]))
@@ -486,8 +489,8 @@ function revivePersisted(
 
   function reviveAnnotations(
     annotations:
-      | SchemaRepresentation.PersistedAnnotations["node"]
-      | SchemaRepresentation.PersistedAnnotations["filter"]
+      | NodeAnnotations
+      | FilterAnnotations
       | undefined,
     path: Path,
     revivedSchemas?: ReadonlyArray<Schema.Top>
@@ -507,7 +510,7 @@ function revivePersisted(
   }
 
   function reviveDeclaration(
-    declaration: SchemaRepresentation.Declaration<SchemaRepresentation.PersistedAnnotations>,
+    declaration: SchemaRepresentation.Declaration,
     path: Path
   ): Schema.Top {
     const representationPath = [...path, "annotations", "representation"]
@@ -533,7 +536,7 @@ function revivePersisted(
   }
 
   function reviveFilter(
-    filter: SchemaRepresentation.Filter<SchemaRepresentation.PersistedAnnotations>,
+    filter: SchemaRepresentation.Filter,
     path: Path
   ): SchemaAST.Filter<any> {
     const representationPath = [...path, "annotations", "representation"]
@@ -554,7 +557,7 @@ function revivePersisted(
   }
 
   function reviveFilterGroup(
-    group: SchemaRepresentation.FilterGroup<SchemaRepresentation.PersistedAnnotations>,
+    group: SchemaRepresentation.FilterGroup,
     path: Path
   ): SchemaAST.FilterGroup<any> {
     const representationPath = [...path, "annotations", "representation"]
@@ -582,7 +585,7 @@ function revivePersisted(
   }
 
   function reviveCheck(
-    check: SchemaRepresentation.Check<SchemaRepresentation.PersistedAnnotations>,
+    check: SchemaRepresentation.Check,
     path: Path
   ): SchemaAST.Check<any> {
     return check._tag === "Filter"
@@ -592,7 +595,7 @@ function revivePersisted(
 
   function appendChecks<S extends Schema.Top>(
     schema: S,
-    checks: ReadonlyArray<SchemaRepresentation.Check<SchemaRepresentation.PersistedAnnotations>>,
+    checks: ReadonlyArray<SchemaRepresentation.Check>,
     path: Path
   ): S["Rebuild"] {
     const revived = checks.map((check, index) => reviveCheck(check, [...path, index]))
@@ -601,7 +604,7 @@ function revivePersisted(
 
   function annotateNode(
     schema: Schema.Top,
-    annotations: SchemaRepresentation.PersistedAnnotations["node"] | undefined,
+    annotations: NodeAnnotations | undefined,
     path: Path
   ): Schema.Top {
     const revived = reviveAnnotations(annotations, path)
@@ -610,7 +613,7 @@ function revivePersisted(
 
   function finishStructural(
     schema: Schema.Top,
-    representation: Exclude<SchemaRepresentation.PersistedRepresentation, SchemaRepresentation.Reference>,
+    representation: Exclude<SchemaRepresentation.Representation, SchemaRepresentation.Reference>,
     path: Path
   ): Schema.Top {
     return appendChecks(
@@ -621,7 +624,7 @@ function revivePersisted(
   }
 
   function reviveString(
-    representation: SchemaRepresentation.String<SchemaRepresentation.PersistedAnnotations>,
+    representation: SchemaRepresentation.String,
     path: Path
   ): Schema.Top {
     const contentSchema = representation.contentSchema === undefined
@@ -657,7 +660,7 @@ function revivePersisted(
   }
 
   function recur(
-    representation: SchemaRepresentation.PersistedRepresentation,
+    representation: SchemaRepresentation.Representation,
     path: Path
   ): Schema.Top {
     switch (representation._tag) {
@@ -779,7 +782,7 @@ function revivePersisted(
 
 /** @internal */
 export function reviveDocument(
-  document: PersistedDocument,
+  document: Document,
   revivers: ReadonlyArray<SchemaRepresentation.AnyReviver>
 ): Schema.Top {
   return revivePersisted(
@@ -792,7 +795,7 @@ export function reviveDocument(
 
 /** @internal */
 export function reviveMultiDocument(
-  document: PersistedMultiDocument,
+  document: MultiDocument,
   revivers: ReadonlyArray<SchemaRepresentation.AnyReviver>
 ): SchemaRepresentation.SchemaMultiDocument {
   return revivePersisted(document.representations, document.references, makeReviverMap(revivers), false)

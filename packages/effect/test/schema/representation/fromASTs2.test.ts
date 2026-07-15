@@ -340,9 +340,7 @@ describe("fromAST2 parity", () => {
       const document = InternalRepresentation2.fromEncodedAST(
         Schema.fromJsonString(Schema.Struct({ a: Schema.String })).ast
       )
-      const representation = document.representation as SchemaRepresentation.String<
-        SchemaRepresentation.LiveAnnotations
-      >
+      const representation = document.representation as SchemaRepresentation.String
       deepStrictEqual(representation.contentSchema, {
         _tag: "Objects",
         propertySignatures: [

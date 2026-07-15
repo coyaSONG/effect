@@ -4,13 +4,13 @@ import * as InternalRepresentation from "effect/internal/schema/representation2"
 import { throws } from "../../utils/assert.ts"
 
 function project(
-  document: SchemaRepresentation2.Document<SchemaRepresentation2.LiveAnnotations>
-): SchemaRepresentation2.Document<SchemaRepresentation2.PersistedAnnotations> {
+  document: SchemaRepresentation2.Document
+): SchemaRepresentation2.Document {
   return InternalRepresentation.projectDocument(document)
 }
 
 function projectErrorMessage(
-  document: SchemaRepresentation2.Document<SchemaRepresentation2.LiveAnnotations>
+  document: SchemaRepresentation2.Document
 ): string {
   let message: string | undefined
   throws(() => InternalRepresentation.projectDocument(document), (error: unknown) => {

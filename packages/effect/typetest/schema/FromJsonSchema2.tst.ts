@@ -6,13 +6,11 @@ describe("JSON Schema importer v2", () => {
     const fromDocument: (
       document: JsonSchema.Document<"draft-2020-12">,
       options?: SchemaRepresentation2.FromJsonSchemaOptions
-    ) => SchemaRepresentation2.Document<SchemaRepresentation2.PersistedAnnotations> =
-      SchemaRepresentation2.fromJsonSchemaDocument
+    ) => SchemaRepresentation2.Document = SchemaRepresentation2.fromJsonSchemaDocument
     const fromMultiDocument: (
       document: JsonSchema.MultiDocument<"draft-2020-12">,
       options?: SchemaRepresentation2.FromJsonSchemaOptions
-    ) => SchemaRepresentation2.MultiDocument<SchemaRepresentation2.PersistedAnnotations> =
-      SchemaRepresentation2.fromJsonSchemaMultiDocument
+    ) => SchemaRepresentation2.MultiDocument = SchemaRepresentation2.fromJsonSchemaMultiDocument
     const toSchemaFromDocument: (
       document: JsonSchema.Document<"draft-2020-12">,
       options?: SchemaRepresentation2.FromJsonSchemaOptions
@@ -26,13 +24,13 @@ describe("JSON Schema importer v2", () => {
       (
         document: JsonSchema.Document<"draft-2020-12">,
         options?: SchemaRepresentation2.FromJsonSchemaOptions
-      ) => SchemaRepresentation2.Document<SchemaRepresentation2.PersistedAnnotations>
+      ) => SchemaRepresentation2.Document
     >()
     expect(fromMultiDocument).type.toBe<
       (
         document: JsonSchema.MultiDocument<"draft-2020-12">,
         options?: SchemaRepresentation2.FromJsonSchemaOptions
-      ) => SchemaRepresentation2.MultiDocument<SchemaRepresentation2.PersistedAnnotations>
+      ) => SchemaRepresentation2.MultiDocument
     >()
     expect(toSchemaFromDocument).type.toBe<
       (

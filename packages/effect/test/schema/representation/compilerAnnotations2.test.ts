@@ -13,17 +13,17 @@ function expectError(thunk: () => void, expected: string | Error): void {
   }
 }
 
-const StringRepresentation: SchemaRepresentation2.LiveRepresentation = {
+const StringRepresentation: SchemaRepresentation2.Representation = {
   _tag: "String",
   checks: []
 }
 
-const NumberRepresentation: SchemaRepresentation2.LiveRepresentation = {
+const NumberRepresentation: SchemaRepresentation2.Representation = {
   _tag: "Number",
   checks: []
 }
 
-const EmptyUnionRepresentation: SchemaRepresentation2.LiveRepresentation = {
+const EmptyUnionRepresentation: SchemaRepresentation2.Representation = {
   _tag: "Union",
   types: [],
   mode: "anyOf",
@@ -192,7 +192,7 @@ describe("SchemaRepresentation2 compiler annotations", () => {
 
     it("uses group overrides without visiting children and otherwise falls back to allOf", () => {
       let visits = 0
-      const child: SchemaRepresentation2.Filter<SchemaRepresentation2.LiveAnnotations> = {
+      const child: SchemaRepresentation2.Filter = {
         _tag: "Filter",
         aborted: false,
         annotations: {
@@ -202,7 +202,7 @@ describe("SchemaRepresentation2 compiler annotations", () => {
           }
         }
       }
-      const override: SchemaRepresentation2.FilterGroup<SchemaRepresentation2.LiveAnnotations> = {
+      const override: SchemaRepresentation2.FilterGroup = {
         _tag: "FilterGroup",
         checks: [child],
         annotations: {
@@ -210,12 +210,12 @@ describe("SchemaRepresentation2 compiler annotations", () => {
           toJsonSchema: () => ({ format: "custom" })
         }
       }
-      const fallback: SchemaRepresentation2.FilterGroup<SchemaRepresentation2.LiveAnnotations> = {
+      const fallback: SchemaRepresentation2.FilterGroup = {
         _tag: "FilterGroup",
         checks: [child, { _tag: "Filter", aborted: false }],
         annotations: { description: "fallback" }
       }
-      const document: SchemaRepresentation2.MultiDocument<SchemaRepresentation2.LiveAnnotations> = {
+      const document: SchemaRepresentation2.MultiDocument = {
         representations: [
           { _tag: "String", checks: [override] },
           { _tag: "String", checks: [fallback] }
@@ -239,7 +239,7 @@ describe("SchemaRepresentation2 compiler annotations", () => {
 
     it("treats an empty override as authoritative and ignores a leaf without a callback", () => {
       let visits = 0
-      const document: SchemaRepresentation2.Document<SchemaRepresentation2.LiveAnnotations> = {
+      const document: SchemaRepresentation2.Document = {
         representation: {
           _tag: "String",
           checks: [{
@@ -270,7 +270,7 @@ describe("SchemaRepresentation2 compiler annotations", () => {
     })
 
     it("compiles representation.schemas before invoking a callback", () => {
-      const document: SchemaRepresentation2.Document<SchemaRepresentation2.LiveAnnotations> = {
+      const document: SchemaRepresentation2.Document = {
         representation: {
           _tag: "Objects",
           propertySignatures: [],
@@ -300,7 +300,7 @@ describe("SchemaRepresentation2 compiler annotations", () => {
     })
 
     it("passes type parameters and dependencies to declaration callbacks", () => {
-      const document: SchemaRepresentation2.Document<SchemaRepresentation2.LiveAnnotations> = {
+      const document: SchemaRepresentation2.Document = {
         representation: {
           _tag: "Declaration",
           typeParameters: [StringRepresentation],
@@ -344,7 +344,7 @@ describe("SchemaRepresentation2 compiler annotations", () => {
       const pattern = SchemaRepresentation2.fromAST(
         Schema.String.check(Schema.isPattern(/^b/)).ast
       ).representation
-      const document: SchemaRepresentation2.Document<SchemaRepresentation2.LiveAnnotations> = {
+      const document: SchemaRepresentation2.Document = {
         representation: {
           _tag: "Objects",
           propertySignatures: [],
@@ -367,7 +367,7 @@ describe("SchemaRepresentation2 compiler annotations", () => {
     })
 
     it("ignores boolean members while collecting index-signature patterns", () => {
-      const document: SchemaRepresentation2.Document<SchemaRepresentation2.LiveAnnotations> = {
+      const document: SchemaRepresentation2.Document = {
         representation: {
           _tag: "Objects",
           propertySignatures: [],
@@ -397,8 +397,8 @@ describe("SchemaRepresentation2 compiler annotations", () => {
 
     it("resolves referenced index-signature parameters and stops cycles", () => {
       const record = (
-        parameter: SchemaRepresentation2.LiveRepresentation
-      ): SchemaRepresentation2.LiveRepresentation => ({
+        parameter: SchemaRepresentation2.Representation
+      ): SchemaRepresentation2.Representation => ({
         _tag: "Objects",
         propertySignatures: [],
         indexSignatures: [{ parameter, type: StringRepresentation }],
@@ -440,7 +440,7 @@ describe("SchemaRepresentation2 compiler annotations", () => {
     })
 
     it("compiles all supported template-literal parts and rejects other nodes", () => {
-      const representation: SchemaRepresentation2.LiveRepresentation = {
+      const representation: SchemaRepresentation2.Representation = {
         _tag: "TemplateLiteral",
         parts: [
           { _tag: "Literal", literal: "p", checks: [] },
@@ -540,7 +540,7 @@ describe("SchemaRepresentation2 compiler annotations", () => {
     })
 
     it("never exposes compiler capabilities as extension annotations", () => {
-      const document: SchemaRepresentation2.Document<SchemaRepresentation2.LiveAnnotations> = {
+      const document: SchemaRepresentation2.Document = {
         representation: {
           _tag: "String",
           annotations: {
@@ -572,7 +572,7 @@ describe("SchemaRepresentation2 compiler annotations", () => {
     })
 
     it("reports missing declaration callbacks", () => {
-      const missing: SchemaRepresentation2.Document<SchemaRepresentation2.LiveAnnotations> = {
+      const missing: SchemaRepresentation2.Document = {
         representation: {
           _tag: "Declaration",
           typeParameters: [],
@@ -588,7 +588,7 @@ describe("SchemaRepresentation2 compiler annotations", () => {
 
     it("captures exceptions from JSON Schema callbacks", () => {
       const cause = new Error("json schema callback")
-      const document: SchemaRepresentation2.Document<SchemaRepresentation2.LiveAnnotations> = {
+      const document: SchemaRepresentation2.Document = {
         representation: {
           _tag: "String",
           checks: [{
@@ -610,7 +610,7 @@ describe("SchemaRepresentation2 compiler annotations", () => {
     })
 
     it("compiles String contentSchema structurally", () => {
-      const document: SchemaRepresentation2.Document<SchemaRepresentation2.LiveAnnotations> = {
+      const document: SchemaRepresentation2.Document = {
         representation: {
           _tag: "String",
           contentMediaType: "application/json",
@@ -652,7 +652,7 @@ describe("SchemaRepresentation2 compiler annotations", () => {
     })
 
     it("reports missing references with their document path", () => {
-      const document: SchemaRepresentation2.Document<SchemaRepresentation2.LiveAnnotations> = {
+      const document: SchemaRepresentation2.Document = {
         representation: { _tag: "Reference", $ref: "Missing" },
         references: {}
       }
@@ -699,7 +699,7 @@ describe("SchemaRepresentation2 compiler annotations", () => {
     })
 
     it("passes compiled dependencies to checks and deduplicates imports", () => {
-      const check = (name: string): SchemaRepresentation2.Filter<SchemaRepresentation2.LiveAnnotations> => ({
+      const check = (name: string): SchemaRepresentation2.Filter => ({
         _tag: "Filter",
         aborted: false,
         annotations: {
@@ -714,7 +714,7 @@ describe("SchemaRepresentation2 compiler annotations", () => {
           })
         }
       })
-      const document: SchemaRepresentation2.MultiDocument<SchemaRepresentation2.LiveAnnotations> = {
+      const document: SchemaRepresentation2.MultiDocument = {
         representations: [{ _tag: "String", checks: [check("first"), check("second")] }],
         references: {}
       }
@@ -812,7 +812,7 @@ describe("SchemaRepresentation2 compiler annotations", () => {
     })
 
     it("emits tuple element and property annotations", () => {
-      const document: SchemaRepresentation2.MultiDocument<SchemaRepresentation2.LiveAnnotations> = {
+      const document: SchemaRepresentation2.MultiDocument = {
         representations: [
           {
             _tag: "Arrays",
@@ -857,7 +857,7 @@ describe("SchemaRepresentation2 compiler annotations", () => {
 
     it("uses group overrides without visiting children and preserves abort", () => {
       let visits = 0
-      const child: SchemaRepresentation2.Filter<SchemaRepresentation2.LiveAnnotations> = {
+      const child: SchemaRepresentation2.Filter = {
         _tag: "Filter",
         aborted: true,
         annotations: {
@@ -867,7 +867,7 @@ describe("SchemaRepresentation2 compiler annotations", () => {
           }
         }
       }
-      const document: SchemaRepresentation2.MultiDocument<SchemaRepresentation2.LiveAnnotations> = {
+      const document: SchemaRepresentation2.MultiDocument = {
         representations: [
           {
             _tag: "String",
@@ -895,7 +895,7 @@ describe("SchemaRepresentation2 compiler annotations", () => {
     })
 
     it("passes type parameters and dependencies to declaration callbacks", () => {
-      const declaration: SchemaRepresentation2.LiveRepresentation = {
+      const declaration: SchemaRepresentation2.Representation = {
         _tag: "Declaration",
         typeParameters: [StringRepresentation],
         checks: [],
@@ -927,7 +927,7 @@ describe("SchemaRepresentation2 compiler annotations", () => {
     })
 
     it("reports missing generation callbacks and preserves callback exceptions", () => {
-      const missing: SchemaRepresentation2.MultiDocument<SchemaRepresentation2.LiveAnnotations> = {
+      const missing: SchemaRepresentation2.MultiDocument = {
         representations: [{
           _tag: "String",
           checks: [{ _tag: "Filter", aborted: false }]
@@ -940,7 +940,7 @@ describe("SchemaRepresentation2 compiler annotations", () => {
       )
 
       const cause = new Error("generation callback")
-      const throwing: SchemaRepresentation2.MultiDocument<SchemaRepresentation2.LiveAnnotations> = {
+      const throwing: SchemaRepresentation2.MultiDocument = {
         representations: [{
           _tag: "String",
           checks: [{
@@ -962,7 +962,7 @@ describe("SchemaRepresentation2 compiler annotations", () => {
     })
 
     it("composes application/json content schemas once and emits required imports", () => {
-      const contentSchema: SchemaRepresentation2.LiveRepresentation = {
+      const contentSchema: SchemaRepresentation2.Representation = {
         _tag: "Objects",
         propertySignatures: [{
           name: "value",
@@ -973,7 +973,7 @@ describe("SchemaRepresentation2 compiler annotations", () => {
         indexSignatures: [],
         checks: []
       }
-      const document: SchemaRepresentation2.MultiDocument<SchemaRepresentation2.LiveAnnotations> = {
+      const document: SchemaRepresentation2.MultiDocument = {
         representations: [{
           _tag: "String",
           contentMediaType: "application/json",
@@ -1060,7 +1060,7 @@ describe("SchemaRepresentation2 compiler annotations", () => {
     })
 
     it("emits references that are not reachable from a root", () => {
-      const document: SchemaRepresentation2.MultiDocument<SchemaRepresentation2.LiveAnnotations> = {
+      const document: SchemaRepresentation2.MultiDocument = {
         representations: [StringRepresentation],
         references: {
           Unused: NumberRepresentation
@@ -1095,7 +1095,7 @@ describe("SchemaRepresentation2 compiler annotations", () => {
     })
 
     it("reports missing references with their document path", () => {
-      const document: SchemaRepresentation2.MultiDocument<SchemaRepresentation2.LiveAnnotations> = {
+      const document: SchemaRepresentation2.MultiDocument = {
         representations: [{ _tag: "Reference", $ref: "Missing" }],
         references: {}
       }

@@ -412,7 +412,7 @@ describe("SchemaRepresentation2 JSON revival", () => {
 
     const invalidPayload = filterJson() as any
     invalidPayload.representation.checks[0].annotations.representation.payload = new Array(1)
-    const payloadCodecResult = Schema.decodeUnknownResult(SchemaRepresentation2.PersistedDocumentFromJson)(
+    const payloadCodecResult = Schema.decodeUnknownResult(SchemaRepresentation2.DocumentFromJson)(
       invalidPayload
     )
     assert.strictEqual(payloadCodecResult._tag, "Failure")
@@ -427,7 +427,7 @@ describe("SchemaRepresentation2 JSON revival", () => {
       representation: { _tag: "String", annotations: { value: new Array(1) }, checks: [] },
       references: {}
     }
-    const documentCodecResult = Schema.decodeUnknownResult(SchemaRepresentation2.PersistedDocumentFromJson)(
+    const documentCodecResult = Schema.decodeUnknownResult(SchemaRepresentation2.DocumentFromJson)(
       invalidDocument
     )
     assert.strictEqual(documentCodecResult._tag, "Failure")

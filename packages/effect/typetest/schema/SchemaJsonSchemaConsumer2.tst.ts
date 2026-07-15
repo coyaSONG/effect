@@ -9,7 +9,7 @@ describe("Schema JSON Schema v2 consumer", () => {
     ) => JsonSchema.Document<"draft-2020-12"> = Schema.toJsonSchemaDocument2
 
     expect(Schema.toRepresentation2(Schema.String)).type.toBe<
-      SchemaRepresentation2.Document<SchemaRepresentation2.LiveAnnotations>
+      SchemaRepresentation2.Document
     >()
     expect(Schema.toJsonSchemaDocument2(Schema.String)).type.toBe<JsonSchema.Document<"draft-2020-12">>()
     expect(toJsonSchema).type.toBe<

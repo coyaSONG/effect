@@ -15782,7 +15782,7 @@ export function toRepresentation(schema: Constraint): SchemaRepresentation.Docum
  */
 export function toRepresentation2(
   schema: Constraint
-): SchemaRepresentation2.Document<SchemaRepresentation2.LiveAnnotations> {
+): SchemaRepresentation2.Document {
   return InternalRepresentation2.fromAST(schema.ast)
 }
 

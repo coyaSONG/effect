@@ -57,7 +57,7 @@ describe("toCodeDocument2 parity", () => {
   }
 
   function assertMultiDocument(
-    multiDocument: SchemaRepresentation.MultiDocument<SchemaRepresentation.LiveAnnotations>,
+    multiDocument: SchemaRepresentation.MultiDocument,
     expected: Expected
   ) {
     const codeDocument = SchemaRepresentation.toCodeDocument(multiDocument)

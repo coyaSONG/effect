@@ -41,8 +41,8 @@ describe("SchemaRepresentation2 persisted wire codecs", () => {
       references: {}
     })
 
-    const persisted = Schema.decodeUnknownSync(SchemaRepresentation2.PersistedDocumentFromJson)(json)
-    const encoded = Schema.encodeSync(SchemaRepresentation2.PersistedDocumentFromJson)(persisted)
+    const persisted = Schema.decodeUnknownSync(SchemaRepresentation2.DocumentFromJson)(json)
+    const encoded = Schema.encodeSync(SchemaRepresentation2.DocumentFromJson)(persisted)
     assert.deepStrictEqual(encoded, json)
 
     const representation = persisted.representation
@@ -82,7 +82,7 @@ describe("SchemaRepresentation2 persisted wire codecs", () => {
       key: "acme/schema/key"
     })
 
-    const persisted = Schema.decodeUnknownSync(SchemaRepresentation2.PersistedDocumentFromJson)(json)
+    const persisted = Schema.decodeUnknownSync(SchemaRepresentation2.DocumentFromJson)(json)
     assert.strictEqual(persisted.representation._tag, "Arrays")
     if (persisted.representation._tag !== "Arrays") {
       return
@@ -110,7 +110,7 @@ describe("SchemaRepresentation2 persisted wire codecs", () => {
   })
 
   it("roundtrips every exceptional structural number", () => {
-    const document: SchemaRepresentation2.Document<SchemaRepresentation2.PersistedAnnotations> = {
+    const document: SchemaRepresentation2.Document = {
       representation: {
         _tag: "Enum",
         enums: [
@@ -123,7 +123,7 @@ describe("SchemaRepresentation2 persisted wire codecs", () => {
       },
       references: {}
     }
-    const json = Schema.encodeSync(SchemaRepresentation2.PersistedDocumentFromJson)(document)
+    const json = Schema.encodeSync(SchemaRepresentation2.DocumentFromJson)(document)
     assert.deepStrictEqual(asRecord(json).representation.enums, [
       ["negativeZero", { _tag: "ExceptionalNumber", value: "-0" }],
       ["notANumber", { _tag: "ExceptionalNumber", value: "NaN" }],
@@ -131,7 +131,7 @@ describe("SchemaRepresentation2 persisted wire codecs", () => {
       ["negativeInfinity", { _tag: "ExceptionalNumber", value: "-Infinity" }]
     ])
 
-    const decoded = Schema.decodeUnknownSync(SchemaRepresentation2.PersistedDocumentFromJson)(json)
+    const decoded = Schema.decodeUnknownSync(SchemaRepresentation2.DocumentFromJson)(json)
     assert.strictEqual(decoded.representation._tag, "Enum")
     if (decoded.representation._tag === "Enum") {
       assert.isTrue(Object.is(decoded.representation.enums[0][1], -0))
@@ -158,7 +158,7 @@ describe("SchemaRepresentation2 persisted wire codecs", () => {
       const invalid = JSON.parse(JSON.stringify(json))
       invalid.representation.literal = value
       throws(
-        () => Schema.decodeUnknownSync(SchemaRepresentation2.PersistedDocumentFromJson)(invalid),
+        () => Schema.decodeUnknownSync(SchemaRepresentation2.DocumentFromJson)(invalid),
         (error) => {
           assert.isTrue(Schema.isSchemaError(error))
           return undefined
@@ -174,7 +174,7 @@ describe("SchemaRepresentation2 persisted wire codecs", () => {
       Schema.Literal("NaN")
     ])
     const json = SchemaRepresentation2.toJson(SchemaRepresentation2.fromAST(schema.ast))
-    const persisted = Schema.decodeUnknownSync(SchemaRepresentation2.PersistedDocumentFromJson)(json)
+    const persisted = Schema.decodeUnknownSync(SchemaRepresentation2.DocumentFromJson)(json)
     assert.strictEqual(persisted.representation._tag, "Arrays")
     if (persisted.representation._tag === "Arrays") {
       assert.deepStrictEqual(
@@ -196,7 +196,7 @@ describe("SchemaRepresentation2 persisted wire codecs", () => {
       references: {}
     }
     throws(
-      () => Schema.decodeUnknownSync(SchemaRepresentation2.PersistedDocumentFromJson)(invalid),
+      () => Schema.decodeUnknownSync(SchemaRepresentation2.DocumentFromJson)(invalid),
       (error) => {
         assert.isTrue(Schema.isSchemaError(error))
         return undefined
@@ -223,12 +223,12 @@ describe("SchemaRepresentation2 persisted wire codecs", () => {
       representation,
       references: {}
     }
-    Schema.decodeUnknownSync(SchemaRepresentation2.PersistedDocumentFromJson)(input)
+    Schema.decodeUnknownSync(SchemaRepresentation2.DocumentFromJson)(input)
     assert.isTrue(getterCalls > 0)
 
     throws(
       () =>
-        Schema.decodeUnknownSync(SchemaRepresentation2.PersistedDocumentFromJson)({
+        Schema.decodeUnknownSync(SchemaRepresentation2.DocumentFromJson)({
           ...input,
           toJSON() {
             toJsonCalls++
@@ -257,8 +257,8 @@ describe("SchemaRepresentation2 persisted wire codecs", () => {
       },
       references: {}
     }
-    const decoded = Schema.decodeUnknownSync(SchemaRepresentation2.PersistedDocumentFromJson)(input)
-    assert.deepStrictEqual(Schema.encodeSync(SchemaRepresentation2.PersistedDocumentFromJson)(decoded), input)
+    const decoded = Schema.decodeUnknownSync(SchemaRepresentation2.DocumentFromJson)(input)
+    assert.deepStrictEqual(Schema.encodeSync(SchemaRepresentation2.DocumentFromJson)(decoded), input)
 
     const schema = SchemaRepresentation2.fromJson(input, { revivers: [] })
     const representation = SchemaRepresentation2.fromAST(schema.ast).representation
@@ -272,7 +272,7 @@ describe("SchemaRepresentation2 persisted wire codecs", () => {
   })
 
   it("reports persisted wire failures", () => {
-    const cases: ReadonlyArray<readonly [SchemaRepresentation2.LiveRepresentation, string]> = [
+    const cases: ReadonlyArray<readonly [SchemaRepresentation2.Representation, string]> = [
       [
         { _tag: "Reference", $ref: "" },
         `Expected <filter>, got ""\n  at ["representation"]["$ref"]`
@@ -320,13 +320,13 @@ describe("SchemaRepresentation2 persisted wire codecs", () => {
       references: {}
     })
 
-    const persisted = Schema.decodeUnknownSync(SchemaRepresentation2.PersistedMultiDocumentFromJson)(json)
+    const persisted = Schema.decodeUnknownSync(SchemaRepresentation2.MultiDocumentFromJson)(json)
     assert.deepStrictEqual(persisted.representations.map((representation) => representation._tag), [
       "String",
       "Number"
     ])
     assert.deepStrictEqual(
-      Schema.encodeSync(SchemaRepresentation2.PersistedMultiDocumentFromJson)(persisted),
+      Schema.encodeSync(SchemaRepresentation2.MultiDocumentFromJson)(persisted),
       json
     )
   })
@@ -342,7 +342,7 @@ describe("SchemaRepresentation2 persisted wire codecs", () => {
       Schema.ObjectKeyword.ast
     ])
     const json = SchemaRepresentation2.toJsonMultiDocument(live)
-    const persisted = Schema.decodeUnknownSync(SchemaRepresentation2.PersistedMultiDocumentFromJson)(json)
+    const persisted = Schema.decodeUnknownSync(SchemaRepresentation2.MultiDocumentFromJson)(json)
 
     assert.deepStrictEqual(
       persisted.representations.map((representation) => representation._tag),
@@ -366,7 +366,7 @@ describe("SchemaRepresentation2 persisted wire codecs", () => {
       representation: { _tag: "Union", types: [], mode: "anyOf", checks: [] },
       references: {}
     } as const
-    const persisted = Schema.decodeUnknownSync(SchemaRepresentation2.PersistedDocumentFromJson)(json)
+    const persisted = Schema.decodeUnknownSync(SchemaRepresentation2.DocumentFromJson)(json)
     assert.deepStrictEqual(persisted.representation, json.representation)
 
     const is = Schema.is(SchemaRepresentation2.fromJson(json, { revivers: [] }))
@@ -375,13 +375,13 @@ describe("SchemaRepresentation2 persisted wire codecs", () => {
   })
 
   it("reports JSON failures at the root and on direct encoding", () => {
-    const rootFailure = Schema.decodeUnknownResult(SchemaRepresentation2.PersistedDocumentFromJson)(() => undefined)
+    const rootFailure = Schema.decodeUnknownResult(SchemaRepresentation2.DocumentFromJson)(() => undefined)
     assert.strictEqual(rootFailure._tag, "Failure")
     if (rootFailure._tag === "Failure") {
       assert.isTrue(rootFailure.failure.message.includes("Expected JSON value"))
     }
 
-    const encodeFailure = Schema.encodeUnknownResult(SchemaRepresentation2.PersistedDocumentFromJson)({
+    const encodeFailure = Schema.encodeUnknownResult(SchemaRepresentation2.DocumentFromJson)({
       representation: { _tag: "Reference", $ref: "" },
       references: {}
     })
@@ -404,8 +404,8 @@ describe("SchemaRepresentation2 persisted wire codecs", () => {
       }
     })
     assert.deepStrictEqual(
-      Schema.encodeSync(SchemaRepresentation2.PersistedDocumentFromJson)(
-        Schema.decodeUnknownSync(SchemaRepresentation2.PersistedDocumentFromJson)(json)
+      Schema.encodeSync(SchemaRepresentation2.DocumentFromJson)(
+        Schema.decodeUnknownSync(SchemaRepresentation2.DocumentFromJson)(json)
       ),
       json
     )
@@ -419,7 +419,7 @@ describe("SchemaRepresentation2 persisted wire codecs", () => {
     assert.strictEqual(root.contentMediaType, "application/json")
     assert.strictEqual(root.contentSchema._tag, "Objects")
 
-    const persisted = Schema.decodeUnknownSync(SchemaRepresentation2.PersistedDocumentFromJson)(json)
+    const persisted = Schema.decodeUnknownSync(SchemaRepresentation2.DocumentFromJson)(json)
     assert.strictEqual(persisted.representation._tag, "String")
     if (persisted.representation._tag === "String") {
       assert.strictEqual(persisted.representation.contentMediaType, "application/json")
