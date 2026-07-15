@@ -106,7 +106,10 @@ export function fromASTs(asts: readonly [SchemaAST.AST, ...Array<SchemaAST.AST>]
   }
 
   function on(last: SchemaAST.AST): SchemaRepresentation.Representation {
-    const annotations = fromASTAnnotations(last.annotations)
+    const annotations = fromASTAnnotations(
+      last.annotations,
+      last._tag === "Declaration" ? last.typeParameters.length : undefined
+    )
     switch (last._tag) {
       case "Declaration": {
         // this must be executed before transforming the type parameters
@@ -279,6 +282,8 @@ export const fromASTBlacklist: Set<string> = new Set([
   "toCodec",
   "toCodecJson",
   "toCodecIso",
+  "representation",
+  "toJsonSchema",
   SchemaAST.ClassTypeId
 ])
 
@@ -296,10 +301,44 @@ const standardJsonSchemaAnnotationKeys: ReadonlySet<string> = new Set([
 ])
 
 function fromASTAnnotations(
-  annotations: Schema.Annotations.Annotations | undefined
+  annotations: Schema.Annotations.Annotations | undefined,
+  typeParametersArity?: number | undefined
 ): { annotations: Schema.Annotations.Annotations } | undefined {
   if (annotations !== undefined) {
-    const filtered = Rec.filter(annotations, (_, k) => !fromASTBlacklist.has(k))
+    let filtered = Rec.filter(
+      annotations,
+      (_, key) => !fromASTBlacklist.has(key) && (key !== "generation" || typeParametersArity !== undefined)
+    )
+    const generation = filtered.generation
+    if (typeParametersArity !== undefined && Predicate.isFunction(generation)) {
+      const typeParameters = Array.from(
+        { length: typeParametersArity },
+        () => ({ runtime: "?", Type: "?" })
+      )
+      const generated = generation({ typeParameters, schemas: [] })
+      if (
+        Predicate.isObject(generated) &&
+        typeof generated.runtime === "string" &&
+        typeof generated.Type === "string" &&
+        (
+          generated.importDeclarations === undefined ||
+          (Array.isArray(generated.importDeclarations) &&
+            generated.importDeclarations.length <= 1 &&
+            generated.importDeclarations.every(Predicate.isString))
+        )
+      ) {
+        filtered = {
+          ...filtered,
+          generation: {
+            runtime: generated.runtime,
+            Type: generated.Type,
+            ...(generated.importDeclarations?.[0] === undefined
+              ? undefined
+              : { importDeclaration: generated.importDeclarations[0] })
+          }
+        }
+      }
+    }
     if (!Rec.isEmptyRecord(filtered)) {
       return { annotations: filtered }
     }

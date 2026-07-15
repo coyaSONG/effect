@@ -2500,11 +2500,28 @@ export function toCodeDocument(multiDocument: MultiDocument, options?: {
         }
         // otherwise, use the generation from the annotations
         const generation = s.annotations?.generation
+        const typeParameters = s.typeParameters.map(recur)
+        if (Predicate.isFunction(generation)) {
+          const generated = generation({ typeParameters, schemas: [] })
+          if (
+            Predicate.isObject(generated) &&
+            typeof generated.runtime === "string" &&
+            typeof generated.Type === "string"
+          ) {
+            if (Array.isArray(generated.importDeclarations)) {
+              for (const importDeclaration of generated.importDeclarations) {
+                if (typeof importDeclaration === "string") {
+                  addImport(importDeclaration)
+                }
+              }
+            }
+            return makeCode(generated.runtime, generated.Type)
+          }
+        }
         if (
           Predicate.isObject(generation) && typeof generation.runtime === "string" &&
           typeof generation.Type === "string"
         ) {
-          const typeParameters = s.typeParameters.map(recur)
           if (typeof generation.importDeclaration === "string") {
             addImport(generation.importDeclaration)
           }

@@ -56,12 +56,47 @@ export function toCodecOpenAI<T, E, RD, RE>(
   codec: Schema.ConstraintCodec<T, unknown, RD, RE>
   jsonSchema: JsonSchema.JsonSchema
 } {
+  return toCodecOpenAIWith(schema, Schema.toJsonSchemaDocument)
+}
+
+/**
+ * Converts a `Schema.Codec` to OpenAI structured-output JSON Schema through the open v2 compiler.
+ *
+ * **When to use**
+ *
+ * Use to verify OpenAI structured output against the v2 representation pipeline during the shadow migration.
+ *
+ * **Details**
+ *
+ * Provider-specific codec rewrites are applied before the encoded schema is compiled, and the resulting JSON Schema receives the same OpenAI compatibility rewrites as the legacy path.
+ *
+ * @see {@link toCodecOpenAI} for the legacy JSON Schema path
+ *
+ * @category Codec Transformation
+ * @since 4.0.0
+ */
+export function toCodecOpenAI2<T, E, RD, RE>(
+  schema: Schema.ConstraintCodec<T, E, RD, RE>
+): {
+  codec: Schema.ConstraintCodec<T, unknown, RD, RE>
+  jsonSchema: JsonSchema.JsonSchema
+} {
+  return toCodecOpenAIWith(schema, Schema.toJsonSchemaDocument2)
+}
+
+function toCodecOpenAIWith<T, E, RD, RE>(
+  schema: Schema.ConstraintCodec<T, E, RD, RE>,
+  toJsonSchemaDocument: (schema: Schema.Constraint) => JsonSchema.Document<"draft-2020-12">
+): {
+  codec: Schema.ConstraintCodec<T, unknown, RD, RE>
+  jsonSchema: JsonSchema.JsonSchema
+} {
   const to = schema.ast
   const from = recurOpenAI(SchemaAST.toEncoded(to))
   const codec = from === to
     ? schema
     : Schema.make<typeof schema>(SchemaAST.decodeTo(from, to, SchemaTransformation.passthrough()))
-  const document = JsonSchema.resolveTopLevel$ref(Schema.toJsonSchemaDocument(codec))
+  const document = JsonSchema.resolveTopLevel$ref(toJsonSchemaDocument(codec))
   const jsonSchema = rewriteOpenAI(document.schema)
   if (Object.keys(document.definitions).length > 0) {
     jsonSchema.$defs = Rec.map(document.definitions, rewriteOpenAI)

@@ -1654,6 +1654,32 @@ export const getJsonSchema = <Tool extends Any>(tool: Tool, options?: {
 }
 
 /**
+ * Generates JSON Schema for a tool through the open v2 compiler.
+ *
+ * **When to use**
+ *
+ * Use to verify Schema-backed tool parameters against the v2 representation pipeline during the shadow migration.
+ *
+ * **Details**
+ *
+ * Dynamic tools backed by an existing JSON Schema return that schema unchanged. Effect Schema parameters use the encoded projection and the open v2 compiler unless a codec transformer is supplied.
+ *
+ * @see {@link getJsonSchema} for the legacy JSON Schema path
+ * @see {@link getJsonSchemaFromSchema2} for converting an Effect Schema directly
+ *
+ * @category getters
+ * @since 4.0.0
+ */
+export const getJsonSchema2 = <Tool extends Any>(tool: Tool, options?: {
+  readonly transformer?: CodecTransformer
+}): JsonSchema.JsonSchema => {
+  if (isDynamic(tool) && tool.jsonSchema !== undefined) {
+    return tool.jsonSchema
+  }
+  return getJsonSchemaFromSchema2(tool.parametersSchema, options)
+}
+
+/**
  * Generates a JSON Schema from an Effect `Schema`.
  *
  * **Details**
@@ -1669,10 +1695,41 @@ export const getJsonSchema = <Tool extends Any>(tool: Tool, options?: {
 export const getJsonSchemaFromSchema = <S extends Schema.Constraint>(schema: S, options?: {
   readonly transformer?: CodecTransformer
 }): JsonSchema.JsonSchema => {
+  return getJsonSchemaFromSchemaWith(schema, Schema.toJsonSchemaDocument, options)
+}
+
+/**
+ * Generates JSON Schema from an Effect `Schema` through the open v2 compiler.
+ *
+ * **When to use**
+ *
+ * Use to verify Schema-backed AI inputs against the v2 representation pipeline during the shadow migration.
+ *
+ * **Details**
+ *
+ * A supplied codec transformer remains responsible for JSON Schema generation. Without one, the schema is projected to its encoded side and compiled through the v2 representation pipeline.
+ *
+ * @see {@link getJsonSchemaFromSchema} for the legacy JSON Schema path
+ * @see {@link getJsonSchema2} for converting tool parameters
+ *
+ * @category converting
+ * @since 4.0.0
+ */
+export const getJsonSchemaFromSchema2 = <S extends Schema.Constraint>(schema: S, options?: {
+  readonly transformer?: CodecTransformer
+}): JsonSchema.JsonSchema => {
+  return getJsonSchemaFromSchemaWith(schema, Schema.toJsonSchemaDocument2, options)
+}
+
+const getJsonSchemaFromSchemaWith = <S extends Schema.Constraint>(
+  schema: S,
+  toJsonSchemaDocument: (schema: Schema.Constraint) => JsonSchema.Document<"draft-2020-12">,
+  options?: { readonly transformer?: CodecTransformer }
+): JsonSchema.JsonSchema => {
   if (Predicate.isNotUndefined(options?.transformer)) {
     return options.transformer(schema).jsonSchema
   }
-  const document = Schema.toJsonSchemaDocument(schema)
+  const document = toJsonSchemaDocument(schema)
   if (Object.keys(document.definitions).length > 0) {
     document.schema.$defs = document.definitions
   }

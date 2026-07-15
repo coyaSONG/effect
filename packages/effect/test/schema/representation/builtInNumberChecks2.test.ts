@@ -1,0 +1,279 @@
+import { assert, describe, it } from "@effect/vitest"
+import { Schema, type SchemaAST, SchemaRepresentation, SchemaRepresentation2 } from "effect"
+import { throws } from "../../utils/assert.ts"
+
+interface NumberCheckCase {
+  readonly name: string
+  readonly id: string
+  readonly payload: Schema.Json
+  readonly make: () => SchemaAST.Filter<number>
+  readonly reviver: SchemaRepresentation2.AnyReviver
+  readonly runtime: string
+  readonly valid: number
+  readonly invalid: number
+  readonly jsonSchema: object
+}
+
+const cases: ReadonlyArray<NumberCheckCase> = [
+  {
+    name: "isFinite",
+    id: "effect/schema/isFinite",
+    payload: null,
+    make: () => Schema.isFinite(),
+    reviver: Schema.isFiniteReviver,
+    runtime: "Schema.isFinite()",
+    valid: 1,
+    invalid: Infinity,
+    jsonSchema: { type: "number" }
+  },
+  {
+    name: "isInt",
+    id: "effect/schema/isInt",
+    payload: null,
+    make: () => Schema.isInt(),
+    reviver: Schema.isIntReviver,
+    runtime: "Schema.isInt()",
+    valid: 1,
+    invalid: 1.5,
+    jsonSchema: { type: "integer" }
+  },
+  {
+    name: "isMultipleOf",
+    id: "effect/schema/isMultipleOf",
+    payload: { divisor: 3 },
+    make: () => Schema.isMultipleOf(3),
+    reviver: Schema.isMultipleOfReviver,
+    runtime: "Schema.isMultipleOf(3)",
+    valid: 6,
+    invalid: 7,
+    jsonSchema: { multipleOf: 3 }
+  },
+  {
+    name: "isGreaterThan",
+    id: "effect/schema/isGreaterThan",
+    payload: { exclusiveMinimum: 1 },
+    make: () => Schema.isGreaterThan(1),
+    reviver: Schema.isGreaterThanReviver,
+    runtime: "Schema.isGreaterThan(1)",
+    valid: 2,
+    invalid: 1,
+    jsonSchema: { exclusiveMinimum: 1 }
+  },
+  {
+    name: "isGreaterThanOrEqualTo",
+    id: "effect/schema/isGreaterThanOrEqualTo",
+    payload: { minimum: 1 },
+    make: () => Schema.isGreaterThanOrEqualTo(1),
+    reviver: Schema.isGreaterThanOrEqualToReviver,
+    runtime: "Schema.isGreaterThanOrEqualTo(1)",
+    valid: 1,
+    invalid: 0,
+    jsonSchema: { minimum: 1 }
+  },
+  {
+    name: "isLessThan",
+    id: "effect/schema/isLessThan",
+    payload: { exclusiveMaximum: 2 },
+    make: () => Schema.isLessThan(2),
+    reviver: Schema.isLessThanReviver,
+    runtime: "Schema.isLessThan(2)",
+    valid: 1,
+    invalid: 2,
+    jsonSchema: { exclusiveMaximum: 2 }
+  },
+  {
+    name: "isLessThanOrEqualTo",
+    id: "effect/schema/isLessThanOrEqualTo",
+    payload: { maximum: 2 },
+    make: () => Schema.isLessThanOrEqualTo(2),
+    reviver: Schema.isLessThanOrEqualToReviver,
+    runtime: "Schema.isLessThanOrEqualTo(2)",
+    valid: 2,
+    invalid: 3,
+    jsonSchema: { maximum: 2 }
+  },
+  {
+    name: "isBetween",
+    id: "effect/schema/isBetween",
+    payload: { minimum: 1, maximum: 3, exclusiveMinimum: true },
+    make: () => Schema.isBetween({ minimum: 1, maximum: 3, exclusiveMinimum: true }),
+    reviver: Schema.isBetweenReviver,
+    runtime: "Schema.isBetween({ minimum: 1, maximum: 3, exclusiveMinimum: true, exclusiveMaximum: undefined })",
+    valid: 2,
+    invalid: 1,
+    jsonSchema: { exclusiveMinimum: 1, maximum: 3 }
+  }
+]
+
+const encodedNumberJsonSchema = {
+  anyOf: [
+    { type: "number" },
+    { type: "string", enum: ["NaN"] },
+    { type: "string", enum: ["Infinity"] },
+    { type: "string", enum: ["-Infinity"] }
+  ]
+}
+
+function noServices(schema: Schema.Top): Schema.Codec<unknown> {
+  return schema as Schema.Codec<unknown>
+}
+
+function expectInvalidPayload(
+  json: unknown,
+  reviver: SchemaRepresentation2.AnyReviver,
+  pathSuffix: SchemaRepresentation2.Path = []
+): void {
+  throws(
+    () => SchemaRepresentation2.fromJson(json, { revivers: [reviver] }),
+    (error: unknown) => {
+      assert.isTrue(error instanceof SchemaRepresentation2.SchemaRepresentationError)
+      if (error instanceof SchemaRepresentation2.SchemaRepresentationError) {
+        assert.strictEqual(error.issue._tag, "InvalidRepresentationPayload")
+        assert.deepStrictEqual(error.issue.path, [
+          "representation",
+          "checks",
+          0,
+          "annotations",
+          "representation",
+          "payload",
+          ...pathSuffix
+        ])
+      }
+      return undefined
+    }
+  )
+}
+
+describe("SchemaRepresentation2 built-in number checks", () => {
+  it("emits the dual protocol and target callbacks", () => {
+    for (const entry of cases) {
+      const check = entry.make()
+      assert.strictEqual(check.annotations?.meta?._tag, entry.name)
+      assert.deepStrictEqual(check.annotations?.representation, {
+        id: entry.id,
+        payload: entry.payload
+      })
+      assert.deepStrictEqual(
+        check.annotations?.toJsonSchema?.({ type: undefined, schemas: [] }),
+        entry.jsonSchema
+      )
+      assert.deepStrictEqual(check.annotations?.generation?.({ schemas: [] }), {
+        runtime: entry.runtime
+      })
+
+      const legacy = SchemaRepresentation.fromAST(Schema.Number.check(check).ast)
+      assert.strictEqual(legacy.representation._tag, "Number")
+      if (legacy.representation._tag === "Number") {
+        const legacyCheck = legacy.representation.checks[0]
+        assert.strictEqual(legacyCheck._tag, "Filter")
+        if (legacyCheck._tag === "Filter") {
+          assert.strictEqual(legacyCheck.meta._tag, entry.name)
+        }
+      }
+    }
+  })
+
+  it("revives every check without a global registry", () => {
+    const asts = cases.map((entry, index) =>
+      Schema.Number.annotate(index === 0 ? { description: "first" } : {}).check(entry.make()).ast
+    ) as [SchemaAST.AST, ...Array<SchemaAST.AST>]
+    const json = SchemaRepresentation2.toJsonMultiDocument(SchemaRepresentation2.fromASTs(asts))
+    const revived = SchemaRepresentation2.fromJsonMultiDocument(json, {
+      revivers: cases.map((entry) => entry.reviver)
+    })
+
+    assert.strictEqual(revived.schemas.length, cases.length)
+    for (let index = 0; index < cases.length; index++) {
+      const entry = cases[index]
+      const schema = noServices(revived.schemas[index])
+      assert.isTrue(Schema.decodeUnknownResult(schema)(entry.valid)._tag === "Success")
+      assert.isTrue(Schema.decodeUnknownResult(schema)(entry.invalid)._tag === "Failure")
+      assert.strictEqual(schema.ast.checks?.[0].annotations?.representation?.id, entry.id)
+      assert.isTrue(typeof schema.ast.checks?.[0].annotations?.toJsonSchema === "function")
+      assert.isTrue(typeof schema.ast.checks?.[0].annotations?.generation === "function")
+    }
+    assert.strictEqual(revived.schemas[0].ast.annotations?.description, "first")
+
+    const lowered = SchemaRepresentation2.fromASTs(
+      revived.schemas.map((schema) => schema.ast) as [SchemaAST.AST, ...Array<SchemaAST.AST>]
+    )
+    assert.deepStrictEqual(SchemaRepresentation2.toJsonMultiDocument(lowered), json)
+  })
+
+  it("compiles every callback through JSON Schema and codegen", () => {
+    const document = SchemaRepresentation2.fromASTs(
+      cases.map((entry) => Schema.Number.check(entry.make()).ast) as [SchemaAST.AST, ...Array<SchemaAST.AST>]
+    )
+    const jsonSchema = SchemaRepresentation2.toJsonSchemaMultiDocument(document)
+    const code = SchemaRepresentation2.toCodeDocument(document)
+
+    for (let index = 0; index < cases.length; index++) {
+      assert.deepStrictEqual(jsonSchema.schemas[index], {
+        ...encodedNumberJsonSchema,
+        allOf: [cases[index].jsonSchema]
+      })
+      assert.isTrue(code.codes[index].runtime.includes(cases[index].runtime))
+    }
+  })
+
+  it("normalizes between flags to the minimal persisted options", () => {
+    const check = Schema.isBetween({
+      minimum: 1,
+      maximum: 3,
+      exclusiveMinimum: false,
+      exclusiveMaximum: true
+    })
+    assert.deepStrictEqual(check.annotations?.representation, {
+      id: "effect/schema/isBetween",
+      payload: { minimum: 1, maximum: 3, exclusiveMaximum: true }
+    })
+    assert.deepStrictEqual(check.annotations?.generation?.({ schemas: [] }), {
+      runtime: "Schema.isBetween({ minimum: 1, maximum: 3, exclusiveMinimum: undefined, exclusiveMaximum: true })"
+    })
+  })
+
+  it("rejects non-canonical numeric payloads", () => {
+    const divisor = SchemaRepresentation2.toJson(
+      SchemaRepresentation2.fromAST(Schema.Number.check(Schema.isMultipleOf(2)).ast)
+    ) as any
+    divisor.representation.checks[0].annotations.representation.payload.divisor = "2"
+    expectInvalidPayload(divisor, Schema.isMultipleOfReviver)
+
+    const minimum = SchemaRepresentation2.toJson(
+      SchemaRepresentation2.fromAST(Schema.Number.check(Schema.isGreaterThan(1)).ast)
+    ) as any
+    minimum.representation.checks[0].annotations.representation.payload.exclusiveMinimum = -0
+    expectInvalidPayload(minimum, Schema.isGreaterThanReviver, ["exclusiveMinimum"])
+
+    const between = SchemaRepresentation2.toJson(
+      SchemaRepresentation2.fromAST(Schema.Number.check(Schema.isBetween({ minimum: 1, maximum: 3 })).ast)
+    ) as any
+    between.representation.checks[0].annotations.representation.payload.exclusiveMinimum = false
+    expectInvalidPayload(between, Schema.isBetweenReviver)
+  })
+
+  it("keeps non-finite runtime bounds live but rejects their persisted payload", () => {
+    const check = Schema.isGreaterThan(Infinity)
+    assert.deepStrictEqual(check.annotations?.generation?.({ schemas: [] }), {
+      runtime: "Schema.isGreaterThan(Infinity)"
+    })
+    throws(
+      () => SchemaRepresentation2.toJson(SchemaRepresentation2.fromAST(Schema.Number.check(check).ast)),
+      (error: unknown) => {
+        assert.isTrue(error instanceof SchemaRepresentation2.SchemaRepresentationError)
+        if (error instanceof SchemaRepresentation2.SchemaRepresentationError) {
+          assert.strictEqual(error.issue._tag, "InvalidRepresentationPayload")
+          assert.deepStrictEqual(error.issue.path, [
+            "representation",
+            "checks",
+            0,
+            "annotations",
+            "representation",
+            "payload"
+          ])
+        }
+        return undefined
+      }
+    )
+  })
+})

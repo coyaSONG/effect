@@ -692,7 +692,7 @@ export const registerToolkit: <Tools extends Record<string, Tool.Any>>(
     const mcpTool = new McpTool({
       name: tool.name,
       description: Tool.getDescription(tool),
-      inputSchema: Tool.getJsonSchema(tool),
+      inputSchema: Tool.getJsonSchema2(tool),
       annotations: {
         ...(Context.getOption(tool.annotations, Tool.Title).pipe(
           Option.map((title) => ({ title })),
@@ -1196,7 +1196,7 @@ export const elicit: <S extends Schema.ConstraintEncoder<Record<string, unknown>
   const schema = options.schema
   const request = Elicit.payloadSchema.make({
     message: options.message,
-    requestedSchema: Tool.getJsonSchemaFromSchema(schema)
+    requestedSchema: Tool.getJsonSchemaFromSchema2(schema)
   })
   const res = yield* client["elicitation/create"](request).pipe(
     Effect.catchCause((cause) => Effect.fail(new ElicitationDeclined({ cause: Cause.squash(cause), request })))

@@ -554,6 +554,11 @@ export * as SchemaRepresentation from "./SchemaRepresentation.ts"
 /**
  * @since 4.0.0
  */
+export * as SchemaRepresentation2 from "./SchemaRepresentation2.ts"
+
+/**
+ * @since 4.0.0
+ */
 export * as SchemaTransformation from "./SchemaTransformation.ts"
 
 /**

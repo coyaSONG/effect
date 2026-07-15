@@ -25,7 +25,7 @@ import type { DeepMutable, Simplify } from "effect/Types"
 import * as AiError from "effect/unstable/ai/AiError"
 import * as LanguageModel from "effect/unstable/ai/LanguageModel"
 import * as AiModel from "effect/unstable/ai/Model"
-import { toCodecOpenAI } from "effect/unstable/ai/OpenAiStructuredOutput"
+import { toCodecOpenAI2 } from "effect/unstable/ai/OpenAiStructuredOutput"
 import type * as Prompt from "effect/unstable/ai/Prompt"
 import type * as Response from "effect/unstable/ai/Response"
 import * as Tool from "effect/unstable/ai/Tool"
@@ -618,7 +618,7 @@ export const make = Effect.fnUntraced(function*({ model, config: providerConfig 
   )
 
   return yield* LanguageModel.make({
-    codecTransformer: toCodecOpenAI,
+    codecTransformer: toCodecOpenAI2,
     generateText: Effect.fnUntraced(
       function*(options) {
         const config = yield* makeConfig
@@ -1393,13 +1393,13 @@ const unsupportedSchemaError = (error: unknown, method: string): AiError.AiError
 
 const tryJsonSchema = <S extends Schema.Constraint>(schema: S, method: string) =>
   Effect.try({
-    try: () => Tool.getJsonSchemaFromSchema(schema, { transformer: toCodecOpenAI }),
+    try: () => Tool.getJsonSchemaFromSchema2(schema, { transformer: toCodecOpenAI2 }),
     catch: (error) => unsupportedSchemaError(error, method)
   })
 
 const tryToolJsonSchema = <T extends Tool.Any>(tool: T, method: string) =>
   Effect.try({
-    try: () => Tool.getJsonSchema(tool, { transformer: toCodecOpenAI }),
+    try: () => Tool.getJsonSchema2(tool, { transformer: toCodecOpenAI2 }),
     catch: (error) => unsupportedSchemaError(error, method)
   })
 
@@ -1453,7 +1453,7 @@ const prepareTools = Effect.fnUntraced(function*<Tools extends ReadonlyArray<Too
         type: "function",
         name: tool.providerName,
         description: Tool.getDescription(tool) ?? null,
-        parameters: Tool.getJsonSchema(tool) as { readonly [x: string]: Schema.Json },
+        parameters: Tool.getJsonSchema2(tool) as { readonly [x: string]: Schema.Json },
         strict: config.strictJsonSchema ?? true
       })
     }

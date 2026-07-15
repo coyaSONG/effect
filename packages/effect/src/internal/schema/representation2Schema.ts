@@ -1,0 +1,1041 @@
+import * as Arr from "../../Array.ts"
+import * as Effect from "../../Effect.ts"
+import type * as JsonSchema from "../../JsonSchema.ts"
+import * as Option from "../../Option.ts"
+import * as Result from "../../Result.ts"
+import * as Schema from "../../Schema.ts"
+import * as SchemaAST from "../../SchemaAST.ts"
+import * as SchemaGetter from "../../SchemaGetter.ts"
+import * as SchemaIssue from "../../SchemaIssue.ts"
+import type * as SchemaRepresentation from "../../SchemaRepresentation2.ts"
+import * as SchemaTransformation from "../../SchemaTransformation.ts"
+import {
+  captureRevival,
+  copyStrictJson,
+  failRevival,
+  failure,
+  fromJsonSchemaDocument,
+  fromJsonSchemaMultiDocument,
+  hasOwn,
+  projectDocument,
+  type ProjectionResult,
+  projectMultiDocument,
+  protectRevival,
+  type StrictJsonResult,
+  success
+} from "./representation2.ts"
+
+type PersistedRepresentation = SchemaRepresentation.PersistedRepresentation
+type PersistedCheck = SchemaRepresentation.Check<SchemaRepresentation.PersistedAnnotations>
+type PersistedDocument = SchemaRepresentation.Document<SchemaRepresentation.PersistedAnnotations>
+type PersistedMultiDocument = SchemaRepresentation.MultiDocument<SchemaRepresentation.PersistedAnnotations>
+
+type PersistedCodecs = {
+  readonly document: Schema.Codec<PersistedDocument, Schema.Json>
+  readonly multiDocument: Schema.Codec<PersistedMultiDocument, Schema.Json>
+}
+
+function makePersistedCodecs(): PersistedCodecs {
+  const NonEmptyString = Schema.String.check(Schema.makeFilter<string>((value) => value.length > 0))
+  const CanonicalBigIntString = Schema.String.check(
+    Schema.makeFilter<string>((value) => /^(?:0|-?[1-9]\d*)$/.test(value))
+  )
+  const CanonicalBigIntFromString = CanonicalBigIntString.pipe(
+    Schema.decodeTo(Schema.BigInt, {
+      decode: SchemaGetter.transform((value) => globalThis.BigInt(value)),
+      encode: SchemaGetter.transform((value) => value.toString(10))
+    })
+  )
+
+  const BigIntFromJson = Schema.Struct({
+    _tag: Schema.tag("BigInt"),
+    value: CanonicalBigIntFromString
+  }).pipe(
+    Schema.decodeTo(Schema.BigInt, {
+      decode: SchemaGetter.transform((input) => input.value),
+      encode: SchemaGetter.transform((value) => ({ _tag: "BigInt" as const, value }))
+    })
+  )
+
+  const OrdinaryNumber = Schema.Number.check(
+    Schema.makeFilter<number>((value) => Number.isFinite(value) && !Object.is(value, -0))
+  )
+  const ExceptionalNumber = Schema.Number.check(
+    Schema.makeFilter<number>((value) => !Number.isFinite(value) || Object.is(value, -0))
+  )
+  const ExceptionalNumberFromJson = Schema.Struct({
+    _tag: Schema.tag("ExceptionalNumber"),
+    value: Schema.Literals(["-0", "NaN", "Infinity", "-Infinity"])
+  }).pipe(
+    Schema.decodeTo(ExceptionalNumber, {
+      decode: SchemaGetter.transform((input) => {
+        switch (input.value) {
+          case "-0":
+            return -0
+          case "NaN":
+            return Number.NaN
+          case "Infinity":
+            return Number.POSITIVE_INFINITY
+          case "-Infinity":
+            return Number.NEGATIVE_INFINITY
+        }
+      }),
+      encode: SchemaGetter.transform((value) => ({
+        _tag: "ExceptionalNumber" as const,
+        value: Object.is(value, -0)
+          ? "-0" as const
+          : Number.isNaN(value)
+          ? "NaN" as const
+          : value === Number.POSITIVE_INFINITY
+          ? "Infinity" as const
+          : "-Infinity" as const
+      }))
+    })
+  )
+  const StructuralNumberFromJson = Schema.Union([OrdinaryNumber, ExceptionalNumberFromJson])
+
+  const GlobalSymbol = Schema.Symbol.check(
+    Schema.makeFilter<symbol>((value) => globalThis.Symbol.keyFor(value) !== undefined)
+  )
+  const GlobalSymbolFromJson = Schema.Struct({
+    _tag: Schema.tag("GlobalSymbol"),
+    key: Schema.String
+  }).pipe(
+    Schema.decodeTo(GlobalSymbol, {
+      decode: SchemaGetter.transform((input) => globalThis.Symbol.for(input.key)),
+      encode: SchemaGetter.transform((symbol) => ({
+        _tag: "GlobalSymbol" as const,
+        key: globalThis.Symbol.keyFor(symbol) as string
+      }))
+    })
+  )
+
+  type RepresentationCodec = Schema.Codec<PersistedRepresentation, Schema.Json>
+  type CheckCodec = Schema.Codec<PersistedCheck, Schema.Json>
+
+  let RepresentationFromJson: RepresentationCodec
+  const RepresentationRef = Schema.suspend((): RepresentationCodec => RepresentationFromJson) as RepresentationCodec
+
+  const RepresentationAnnotationFromJson = Schema.Struct({
+    id: NonEmptyString,
+    payload: Schema.Json,
+    schemas: Schema.optional(Schema.Array(RepresentationRef))
+  })
+
+  const GenericAnnotationKey = Schema.String.check(
+    Schema.makeFilter<string>((key) => key !== "representation")
+  )
+  const OrdinaryAnnotationsFromJson = Schema.Record(Schema.String, Schema.Json).check(
+    Schema.makeFilter((annotations) => !hasOwn.call(annotations, "representation"))
+  ) as unknown as Schema.Codec<SchemaRepresentation.PersistedOrdinaryAnnotations, Schema.JsonObject>
+  const OpaqueAnnotationsFromJson = Schema.StructWithRest(
+    Schema.Struct({
+      representation: Schema.optional(RepresentationAnnotationFromJson)
+    }),
+    [Schema.Record(GenericAnnotationKey, Schema.Json)]
+  ) as unknown as Schema.Codec<
+    SchemaRepresentation.PersistedOpaqueAnnotations<PersistedRepresentation>,
+    Schema.JsonObject
+  >
+
+  let CheckFromJson: CheckCodec
+  const CheckRef = Schema.suspend((): CheckCodec => CheckFromJson) as CheckCodec
+  const FilterFromJson = Schema.Struct({
+    _tag: Schema.tag("Filter"),
+    annotations: Schema.optional(OpaqueAnnotationsFromJson),
+    aborted: Schema.Boolean
+  })
+  const FilterGroupFromJson = Schema.Struct({
+    _tag: Schema.tag("FilterGroup"),
+    annotations: Schema.optional(OpaqueAnnotationsFromJson),
+    checks: Schema.NonEmptyArray(CheckRef)
+  })
+  CheckFromJson = Schema.Union([FilterFromJson, FilterGroupFromJson]) as unknown as CheckCodec
+
+  function keywordFromJson<Tag extends Exclude<PersistedRepresentation["_tag"], "Reference">>(tag: Tag) {
+    return Schema.Struct({
+      _tag: Schema.tag(tag),
+      annotations: Schema.optional(OrdinaryAnnotationsFromJson),
+      checks: Schema.Array(CheckRef)
+    })
+  }
+
+  const DeclarationFromJson = Schema.Struct({
+    _tag: Schema.tag("Declaration"),
+    annotations: Schema.optional(OpaqueAnnotationsFromJson),
+    typeParameters: Schema.Array(RepresentationRef),
+    checks: Schema.Array(CheckRef)
+  })
+  const SuspendFromJson = Schema.Struct({
+    _tag: Schema.tag("Suspend"),
+    annotations: Schema.optional(OrdinaryAnnotationsFromJson),
+    checks: Schema.Tuple([]),
+    thunk: RepresentationRef
+  })
+  const StringFromJson = Schema.Struct({
+    _tag: Schema.tag("String"),
+    annotations: Schema.optional(OrdinaryAnnotationsFromJson),
+    checks: Schema.Array(CheckRef),
+    contentMediaType: Schema.optional(Schema.String),
+    contentSchema: Schema.optional(RepresentationRef)
+  })
+  const LiteralFromJson = Schema.Struct({
+    _tag: Schema.tag("Literal"),
+    annotations: Schema.optional(OrdinaryAnnotationsFromJson),
+    checks: Schema.Array(CheckRef),
+    literal: Schema.Union([
+      Schema.String,
+      StructuralNumberFromJson,
+      Schema.Boolean,
+      BigIntFromJson
+    ])
+  })
+  const UniqueSymbolFromJson = Schema.Struct({
+    _tag: Schema.tag("UniqueSymbol"),
+    annotations: Schema.optional(OrdinaryAnnotationsFromJson),
+    checks: Schema.Array(CheckRef),
+    symbol: GlobalSymbolFromJson
+  })
+  const EnumFromJson = Schema.Struct({
+    _tag: Schema.tag("Enum"),
+    annotations: Schema.optional(OrdinaryAnnotationsFromJson),
+    checks: Schema.Array(CheckRef),
+    enums: Schema.Array(Schema.Tuple([
+      Schema.String,
+      Schema.Union([Schema.String, StructuralNumberFromJson])
+    ]))
+  })
+  const TemplateLiteralFromJson = Schema.Struct({
+    _tag: Schema.tag("TemplateLiteral"),
+    annotations: Schema.optional(OrdinaryAnnotationsFromJson),
+    checks: Schema.Array(CheckRef),
+    parts: Schema.Array(RepresentationRef)
+  })
+  const ElementFromJson = Schema.Struct({
+    isOptional: Schema.Boolean,
+    type: RepresentationRef,
+    annotations: Schema.optional(OrdinaryAnnotationsFromJson)
+  })
+  const ArraysFromJson = Schema.Struct({
+    _tag: Schema.tag("Arrays"),
+    annotations: Schema.optional(OrdinaryAnnotationsFromJson),
+    checks: Schema.Array(CheckRef),
+    elements: Schema.Array(ElementFromJson),
+    rest: Schema.Array(RepresentationRef)
+  })
+  const StructuralPropertyKeyFromJson = Schema.Union([
+    Schema.String,
+    StructuralNumberFromJson,
+    GlobalSymbolFromJson
+  ])
+  const PropertySignatureFromJson = Schema.Struct({
+    name: StructuralPropertyKeyFromJson,
+    type: RepresentationRef,
+    isOptional: Schema.Boolean,
+    isMutable: Schema.Boolean,
+    annotations: Schema.optional(OrdinaryAnnotationsFromJson)
+  })
+  const IndexSignatureFromJson = Schema.Struct({
+    parameter: RepresentationRef,
+    type: RepresentationRef
+  })
+  const ObjectsFromJson = Schema.Struct({
+    _tag: Schema.tag("Objects"),
+    annotations: Schema.optional(OrdinaryAnnotationsFromJson),
+    checks: Schema.Array(CheckRef),
+    propertySignatures: Schema.Array(PropertySignatureFromJson),
+    indexSignatures: Schema.Array(IndexSignatureFromJson)
+  })
+  const UnionFromJson = Schema.Struct({
+    _tag: Schema.tag("Union"),
+    annotations: Schema.optional(OrdinaryAnnotationsFromJson),
+    checks: Schema.Array(CheckRef),
+    types: Schema.Array(RepresentationRef),
+    mode: Schema.Literals(["anyOf", "oneOf"])
+  })
+  const ReferenceFromJson = Schema.Struct({
+    _tag: Schema.tag("Reference"),
+    $ref: NonEmptyString
+  })
+
+  RepresentationFromJson = Schema.Union([
+    DeclarationFromJson,
+    ReferenceFromJson,
+    SuspendFromJson,
+    keywordFromJson("Null"),
+    keywordFromJson("Undefined"),
+    keywordFromJson("Void"),
+    keywordFromJson("Never"),
+    keywordFromJson("Unknown"),
+    keywordFromJson("Any"),
+    StringFromJson,
+    keywordFromJson("Number"),
+    keywordFromJson("Boolean"),
+    keywordFromJson("BigInt"),
+    keywordFromJson("Symbol"),
+    LiteralFromJson,
+    UniqueSymbolFromJson,
+    keywordFromJson("ObjectKeyword"),
+    EnumFromJson,
+    TemplateLiteralFromJson,
+    ArraysFromJson,
+    ObjectsFromJson,
+    UnionFromJson
+  ]) as unknown as RepresentationCodec
+
+  const PersistedDocumentWire = Schema.Struct({
+    representation: RepresentationRef,
+    references: Schema.Record(Schema.String, RepresentationRef)
+  }) as unknown as Schema.Codec<PersistedDocument, Schema.Json>
+  const PersistedMultiDocumentWire = Schema.Struct({
+    representations: Schema.NonEmptyArray(RepresentationRef),
+    references: Schema.Record(Schema.String, RepresentationRef)
+  }) as unknown as Schema.Codec<PersistedMultiDocument, Schema.Json>
+
+  function strictJsonIssue(result: StrictJsonResult & { readonly _tag: "Failure" }): SchemaIssue.Issue {
+    const issue = new SchemaIssue.InvalidValue(Option.some(result.actual), { message: "Expected strict JSON" })
+    return result.path.length === 0 ? issue : new SchemaIssue.Pointer(result.path, issue)
+  }
+
+  function exactParseOptions(options: SchemaAST.ParseOptions): SchemaAST.ParseOptions {
+    return { ...options, onExcessProperty: "error" }
+  }
+
+  const StrictJson = Schema.declareConstructor<Schema.Json>()(
+    [],
+    () => (input) => {
+      const json = copyStrictJson(input)
+      return json._tag === "Failure"
+        ? Effect.fail(strictJsonIssue(json))
+        : Effect.succeed(json.value)
+    }
+  )
+
+  function makePersistedCodec<A>(wire: Schema.Codec<A, Schema.Json>): Schema.Codec<A, Schema.Json> {
+    const target = Schema.declare<A>((input): input is A => typeof input === "object" && input !== null)
+    return StrictJson.pipe(
+      Schema.decodeTo(target, {
+        decode: SchemaGetter.transformOrFail<A, Schema.Json>((input, options) => {
+          const decoded = Schema.decodeUnknownResult(wire, exactParseOptions(options))(input)
+          return Result.isFailure(decoded) ? Effect.fail(decoded.failure.issue) : Effect.succeed(decoded.success)
+        }),
+        encode: SchemaGetter.transformOrFail<Schema.Json, A>((input, options) => {
+          const encoded = Schema.encodeUnknownResult(wire, exactParseOptions(options))(input)
+          return Result.isFailure(encoded) ? Effect.fail(encoded.failure.issue) : Effect.succeed(encoded.success)
+        })
+      })
+    )
+  }
+
+  return {
+    document: makePersistedCodec(PersistedDocumentWire),
+    multiDocument: makePersistedCodec(PersistedMultiDocumentWire)
+  }
+}
+
+let persistedCodecs: PersistedCodecs | undefined
+
+function getPersistedCodecs(): PersistedCodecs {
+  return persistedCodecs ??= makePersistedCodecs()
+}
+
+/** @internal */
+export function getPersistedDocumentFromJson(): Schema.Codec<PersistedDocument, Schema.Json> {
+  return getPersistedCodecs().document
+}
+
+/** @internal */
+export function getPersistedMultiDocumentFromJson(): Schema.Codec<PersistedMultiDocument, Schema.Json> {
+  return getPersistedCodecs().multiDocument
+}
+
+function encodeProjected<A>(codec: Schema.Codec<A, Schema.Json>, input: A): ProjectionResult<Schema.Json> {
+  const encoded = Schema.encodeResult(codec)(input)
+  return Result.isFailure(encoded)
+    ? failure({ _tag: "InvalidDocument", path: [], cause: encoded.failure })
+    : success(encoded.success)
+}
+
+/** @internal */
+export function toJson(
+  document: SchemaRepresentation.Document<SchemaRepresentation.LiveAnnotations>
+): ProjectionResult<Schema.Json> {
+  const projected = projectDocument(document)
+  return projected._tag === "Failure"
+    ? projected
+    : encodeProjected(getPersistedCodecs().document, projected.value)
+}
+
+/** @internal */
+export function toJsonMultiDocument(
+  document: SchemaRepresentation.MultiDocument<SchemaRepresentation.LiveAnnotations>
+): ProjectionResult<Schema.Json> {
+  const projected = projectMultiDocument(document)
+  return projected._tag === "Failure"
+    ? projected
+    : encodeProjected(getPersistedCodecs().multiDocument, projected.value)
+}
+
+class ReferenceSlot {
+  body: Schema.Top | undefined
+  readonly wrapper: Schema.Top
+
+  constructor(key: string) {
+    this.wrapper = Schema.suspend((): Schema.Top => {
+      if (this.body === undefined) {
+        throw new Error(`Reference ${key} was evaluated before it was resolved`)
+      }
+      return this.body
+    }).annotate({ identifier: key })
+  }
+}
+
+function getIssuePath(input: unknown, path: SchemaRepresentation.Path = []): SchemaRepresentation.Path {
+  if (typeof input !== "object" || input === null) {
+    return path
+  }
+  const issue = input as Record<string, unknown>
+  if (issue._tag === "Pointer" && Array.isArray(issue.path)) {
+    const segments = issue.path.filter((segment): segment is string | number =>
+      typeof segment === "string" || typeof segment === "number"
+    )
+    return getIssuePath(issue.issue, [...path, ...segments])
+  }
+  if (issue.issue !== undefined) {
+    return getIssuePath(issue.issue, path)
+  }
+  if (Array.isArray(issue.issues) && issue.issues.length > 0) {
+    return getIssuePath(issue.issues[0], path)
+  }
+  return path
+}
+
+function isRepresentationPayloadPath(path: SchemaRepresentation.Path): boolean {
+  for (let index = 0; index <= path.length - 3; index++) {
+    if (
+      path[index] === "annotations" &&
+      path[index + 1] === "representation" &&
+      path[index + 2] === "payload"
+    ) {
+      return true
+    }
+  }
+  return false
+}
+
+function decodePersisted<A>(input: unknown, codec: Schema.Codec<A, Schema.Json>): ProjectionResult<A> {
+  const json = copyStrictJson(input)
+  if (json._tag === "Failure") {
+    return isRepresentationPayloadPath(json.path)
+      ? failure({
+        _tag: "InvalidRepresentationPayload",
+        path: json.path,
+        cause: json.actual
+      })
+      : failure({ _tag: "InvalidDocument", path: json.path, cause: json.actual })
+  }
+
+  const attempt = Result.try(() => Schema.decodeUnknownResult(codec)(json.value))
+  if (Result.isFailure(attempt)) {
+    return failure({ _tag: "InvalidDocument", path: [], cause: attempt.failure })
+  }
+  const decoded = attempt.success
+  return Result.isFailure(decoded)
+    ? failure({
+      _tag: "InvalidDocument",
+      path: getIssuePath(decoded.failure.issue),
+      cause: decoded.failure
+    })
+    : success(decoded.success)
+}
+
+function makeReviverMap(
+  revivers: ReadonlyArray<SchemaRepresentation.AnyReviver>
+): Map<string, SchemaRepresentation.AnyReviver> {
+  const out = new Map<string, SchemaRepresentation.AnyReviver>()
+  const firstIndexes = new Map<string, number>()
+
+  for (let index = 0; index < revivers.length; index++) {
+    const reviver = revivers[index]
+    if (!Number.isInteger(reviver.schemasArity) || reviver.schemasArity < 0) {
+      return failRevival({
+        _tag: "InvalidReviverArity",
+        path: ["revivers", index, "schemasArity"],
+        id: reviver.id,
+        field: "schemasArity",
+        actual: reviver.schemasArity
+      })
+    }
+    if (
+      reviver._tag === "Declaration" &&
+      (!Number.isInteger(reviver.typeParametersArity) || reviver.typeParametersArity < 0)
+    ) {
+      return failRevival({
+        _tag: "InvalidReviverArity",
+        path: ["revivers", index, "typeParametersArity"],
+        id: reviver.id,
+        field: "typeParametersArity",
+        actual: reviver.typeParametersArity
+      })
+    }
+
+    const firstIndex = firstIndexes.get(reviver.id)
+    if (firstIndex !== undefined) {
+      return failRevival({
+        _tag: "DuplicateReviver",
+        path: ["revivers", index, "id"],
+        id: reviver.id,
+        firstIndex,
+        duplicateIndex: index
+      })
+    }
+    firstIndexes.set(reviver.id, index)
+    out.set(reviver.id, reviver)
+  }
+
+  return out
+}
+
+function ordinaryAnnotations(
+  annotations:
+    | SchemaRepresentation.PersistedAnnotations["node"]
+    | SchemaRepresentation.PersistedAnnotations["filter"]
+    | undefined
+): Schema.Annotations.Annotations | undefined {
+  if (annotations === undefined) {
+    return undefined
+  }
+  const out: Record<string, unknown> = {}
+  let count = 0
+  for (const key of Object.keys(annotations)) {
+    if (key !== "representation") {
+      Object.defineProperty(out, key, {
+        value: annotations[key],
+        enumerable: true,
+        configurable: true,
+        writable: true
+      })
+      count++
+    }
+  }
+  return count === 0 ? undefined : out
+}
+
+function getRepresentationAnnotation(
+  annotations:
+    | SchemaRepresentation.PersistedAnnotations["node"]
+    | SchemaRepresentation.PersistedAnnotations["filter"]
+    | undefined,
+  path: SchemaRepresentation.Path,
+  required: boolean
+): SchemaRepresentation.RepresentationAnnotation<SchemaRepresentation.PersistedRepresentation> | undefined {
+  const representation = annotations?.representation
+  if (representation === undefined && required) {
+    return failRevival({ _tag: "MissingRepresentation", path })
+  }
+  return representation
+}
+
+function revivePersisted(
+  representations: readonly [
+    SchemaRepresentation.PersistedRepresentation,
+    ...Array<SchemaRepresentation.PersistedRepresentation>
+  ],
+  references: SchemaRepresentation.References<SchemaRepresentation.PersistedAnnotations>,
+  revivers: ReadonlyArray<SchemaRepresentation.AnyReviver>,
+  singleRoot: boolean
+): SchemaRepresentation.SchemaMultiDocument {
+  const reviverMap = makeReviverMap(revivers)
+  const slots = new Map<string, ReferenceSlot>()
+  const referenceKeys = Object.keys(references)
+
+  for (const key of referenceKeys) {
+    slots.set(key, new ReferenceSlot(key))
+  }
+
+  function resolveReviver(
+    representation: SchemaRepresentation.RepresentationAnnotation<SchemaRepresentation.PersistedRepresentation>,
+    expected: "Declaration",
+    path: SchemaRepresentation.Path
+  ): SchemaRepresentation.DeclarationReviver<any>
+  function resolveReviver(
+    representation: SchemaRepresentation.RepresentationAnnotation<SchemaRepresentation.PersistedRepresentation>,
+    expected: "Filter",
+    path: SchemaRepresentation.Path
+  ): SchemaRepresentation.FilterReviver<any>
+  function resolveReviver(
+    representation: SchemaRepresentation.RepresentationAnnotation<SchemaRepresentation.PersistedRepresentation>,
+    expected: "FilterGroup",
+    path: SchemaRepresentation.Path
+  ): SchemaRepresentation.FilterGroupReviver<any>
+  function resolveReviver(
+    representation: SchemaRepresentation.RepresentationAnnotation<SchemaRepresentation.PersistedRepresentation>,
+    expected: "Declaration" | "Filter" | "FilterGroup",
+    path: SchemaRepresentation.Path
+  ): SchemaRepresentation.AnyReviver {
+    const reviver = reviverMap.get(representation.id)
+    if (reviver === undefined) {
+      return failRevival({ _tag: "MissingReviver", path, id: representation.id })
+    }
+    if (reviver._tag !== expected) {
+      return failRevival({
+        _tag: "InvalidReviverKind",
+        path,
+        id: representation.id,
+        expected,
+        actual: reviver._tag
+      })
+    }
+    return reviver
+  }
+
+  function validateSchemasArity(
+    representation: SchemaRepresentation.RepresentationAnnotation<SchemaRepresentation.PersistedRepresentation>,
+    reviver: SchemaRepresentation.AnyReviver,
+    path: SchemaRepresentation.Path
+  ): ReadonlyArray<SchemaRepresentation.PersistedRepresentation> {
+    const schemas = representation.schemas ?? []
+    if (schemas.length !== reviver.schemasArity) {
+      return failRevival({
+        _tag: "InvalidSchemasArity",
+        path,
+        id: representation.id,
+        expected: reviver.schemasArity,
+        actual: schemas.length
+      })
+    }
+    return schemas
+  }
+
+  function decodePayload(
+    representation: SchemaRepresentation.RepresentationAnnotation<SchemaRepresentation.PersistedRepresentation>,
+    reviver: SchemaRepresentation.AnyReviver,
+    path: SchemaRepresentation.Path
+  ): any {
+    const attempt = Result.try(() => Schema.decodeUnknownResult(reviver.payloadSchema)(representation.payload))
+    if (Result.isFailure(attempt)) {
+      return failRevival({
+        _tag: "InvalidRepresentationPayload",
+        path,
+        id: representation.id,
+        cause: attempt.failure
+      })
+    }
+    const decoded = attempt.success
+    if (Result.isFailure(decoded)) {
+      return failRevival({
+        _tag: "InvalidRepresentationPayload",
+        path,
+        id: representation.id,
+        cause: decoded.failure
+      })
+    }
+    return decoded.success
+  }
+
+  function callReviver<A>(
+    id: string,
+    path: SchemaRepresentation.Path,
+    expected: "Schema" | "Filter" | "FilterGroup",
+    revive: () => A,
+    isValid: (input: unknown) => input is A
+  ): A {
+    const result = Result.try(revive)
+    if (Result.isFailure(result)) {
+      return failRevival({
+        _tag: "InvalidReviverResult",
+        path,
+        id,
+        expected,
+        cause: result.failure
+      })
+    }
+    if (!isValid(result.success)) {
+      return failRevival({
+        _tag: "InvalidReviverResult",
+        path,
+        id,
+        expected,
+        actual: result.success
+      })
+    }
+    return result.success
+  }
+
+  function reviveSchemas(
+    representations: ReadonlyArray<SchemaRepresentation.PersistedRepresentation>,
+    path: SchemaRepresentation.Path
+  ): ReadonlyArray<Schema.Top> {
+    return representations.map((representation, index) => recur(representation, [...path, index]))
+  }
+
+  function reviveDeclaration(
+    declaration: SchemaRepresentation.Declaration<SchemaRepresentation.PersistedAnnotations>,
+    path: SchemaRepresentation.Path
+  ): Schema.Top {
+    const representationPath = [...path, "annotations", "representation"]
+    const representation = getRepresentationAnnotation(declaration.annotations, representationPath, true)!
+    const reviver = resolveReviver(representation, "Declaration", representationPath)
+    const schemaRepresentations = validateSchemasArity(
+      representation,
+      reviver,
+      [...representationPath, "schemas"]
+    )
+    if (declaration.typeParameters.length !== reviver.typeParametersArity) {
+      return failRevival({
+        _tag: "InvalidTypeParametersArity",
+        path: [...path, "typeParameters"],
+        id: representation.id,
+        expected: reviver.typeParametersArity,
+        actual: declaration.typeParameters.length
+      })
+    }
+    const payload = decodePayload(representation, reviver, [...representationPath, "payload"])
+    const schemas = reviveSchemas(schemaRepresentations, [...representationPath, "schemas"])
+    const typeParameters = reviveSchemas(declaration.typeParameters, [...path, "typeParameters"])
+    const annotations = ordinaryAnnotations(declaration.annotations)
+    const schema = callReviver(
+      representation.id,
+      representationPath,
+      "Schema",
+      () => reviver.revive({ payload, schemas, typeParameters, annotations }),
+      Schema.isSchema
+    )
+    return appendChecks(schema, declaration.checks, [...path, "checks"])
+  }
+
+  function reviveFilter(
+    filter: SchemaRepresentation.Filter<SchemaRepresentation.PersistedAnnotations>,
+    path: SchemaRepresentation.Path
+  ): SchemaAST.Filter<any> {
+    const representationPath = [...path, "annotations", "representation"]
+    const representation = getRepresentationAnnotation(filter.annotations, representationPath, true)!
+    const reviver = resolveReviver(representation, "Filter", representationPath)
+    const schemaRepresentations = validateSchemasArity(
+      representation,
+      reviver,
+      [...representationPath, "schemas"]
+    )
+    const payload = decodePayload(representation, reviver, [...representationPath, "payload"])
+    const schemas = reviveSchemas(schemaRepresentations, [...representationPath, "schemas"])
+    const annotations = ordinaryAnnotations(filter.annotations) as Schema.Annotations.Filter | undefined
+    const check = callReviver(
+      representation.id,
+      representationPath,
+      "Filter",
+      () => reviver.revive({ payload, schemas, annotations }),
+      (input): input is SchemaAST.Filter<any> => input instanceof SchemaAST.Filter
+    )
+    return filter.aborted ? check.abort() : check
+  }
+
+  function reviveFilterGroup(
+    group: SchemaRepresentation.FilterGroup<SchemaRepresentation.PersistedAnnotations>,
+    path: SchemaRepresentation.Path
+  ): SchemaAST.FilterGroup<any> {
+    const representationPath = [...path, "annotations", "representation"]
+    const representation = getRepresentationAnnotation(group.annotations, representationPath, false)
+    const annotations = ordinaryAnnotations(group.annotations) as Schema.Annotations.Filter | undefined
+    if (representation === undefined) {
+      const checks = group.checks.map((check, index) => reviveCheck(check, [...path, "checks", index]))
+      return Schema.makeFilterGroup(
+        checks as [SchemaAST.Check<any>, ...Array<SchemaAST.Check<any>>],
+        annotations
+      )
+    }
+
+    const reviver = resolveReviver(representation, "FilterGroup", representationPath)
+    const schemaRepresentations = validateSchemasArity(
+      representation,
+      reviver,
+      [...representationPath, "schemas"]
+    )
+    const payload = decodePayload(representation, reviver, [...representationPath, "payload"])
+    const schemas = reviveSchemas(schemaRepresentations, [...representationPath, "schemas"])
+    return callReviver(
+      representation.id,
+      representationPath,
+      "FilterGroup",
+      () => reviver.revive({ payload, schemas, annotations }),
+      (input): input is SchemaAST.FilterGroup<any> => input instanceof SchemaAST.FilterGroup
+    )
+  }
+
+  function reviveCheck(
+    check: SchemaRepresentation.Check<SchemaRepresentation.PersistedAnnotations>,
+    path: SchemaRepresentation.Path
+  ): SchemaAST.Check<any> {
+    return check._tag === "Filter"
+      ? reviveFilter(check, path)
+      : reviveFilterGroup(check, path)
+  }
+
+  function appendChecks<S extends Schema.Top>(
+    schema: S,
+    checks: ReadonlyArray<SchemaRepresentation.Check<SchemaRepresentation.PersistedAnnotations>>,
+    path: SchemaRepresentation.Path
+  ): S["Rebuild"] {
+    const revived = checks.map((check, index) => reviveCheck(check, [...path, index]))
+    return Arr.isArrayNonEmpty(revived) ? schema.check(...revived) : schema as S["Rebuild"]
+  }
+
+  function annotateNode(
+    schema: Schema.Top,
+    annotations: SchemaRepresentation.PersistedAnnotations["node"] | undefined
+  ): Schema.Top {
+    const ordinary = ordinaryAnnotations(annotations)
+    return ordinary === undefined ? schema : schema.annotate(ordinary)
+  }
+
+  function finishStructural(
+    schema: Schema.Top,
+    representation: Exclude<SchemaRepresentation.PersistedRepresentation, SchemaRepresentation.Reference>,
+    path: SchemaRepresentation.Path
+  ): Schema.Top {
+    return appendChecks(
+      annotateNode(schema, representation.annotations),
+      representation.checks,
+      [...path, "checks"]
+    )
+  }
+
+  function reviveString(
+    representation: SchemaRepresentation.String<SchemaRepresentation.PersistedAnnotations>,
+    path: SchemaRepresentation.Path
+  ): Schema.Top {
+    const contentSchema = representation.contentSchema === undefined
+      ? undefined
+      : recur(representation.contentSchema, [...path, "contentSchema"])
+    const ordinary = ordinaryAnnotations(representation.annotations)
+    const annotations = ordinary === undefined &&
+        representation.contentMediaType === undefined &&
+        contentSchema === undefined
+      ? undefined
+      : {
+        ...ordinary,
+        ...(representation.contentMediaType === undefined
+          ? undefined
+          : { contentMediaType: representation.contentMediaType }),
+        ...(contentSchema === undefined
+          ? undefined
+          : { contentSchema: SchemaAST.toEncoded(contentSchema.ast) })
+      }
+    const source = appendChecks(
+      annotations === undefined ? Schema.String : Schema.String.annotate(annotations),
+      representation.checks,
+      [...path, "checks"]
+    )
+    return representation.contentMediaType === "application/json" && contentSchema !== undefined
+      ? source.pipe(Schema.decodeTo(contentSchema, SchemaTransformation.fromJsonString))
+      : source
+  }
+
+  function recur(
+    representation: SchemaRepresentation.PersistedRepresentation,
+    path: SchemaRepresentation.Path
+  ): Schema.Top {
+    return protectRevival(path, () => {
+      switch (representation._tag) {
+        case "Reference": {
+          const slot = slots.get(representation.$ref)
+          return slot === undefined
+            ? failRevival({ _tag: "InvalidReference", path: [...path, "$ref"], $ref: representation.$ref })
+            : slot.wrapper
+        }
+        case "Declaration":
+          return reviveDeclaration(representation, path)
+        case "Suspend": {
+          const thunk = recur(representation.thunk, [...path, "thunk"])
+          return annotateNode(Schema.suspend(() => thunk), representation.annotations)
+        }
+        case "Null":
+          return finishStructural(Schema.Null, representation, path)
+        case "Undefined":
+          return finishStructural(Schema.Undefined, representation, path)
+        case "Void":
+          return finishStructural(Schema.Void, representation, path)
+        case "Never":
+          return finishStructural(Schema.Never, representation, path)
+        case "Unknown":
+          return finishStructural(Schema.Unknown, representation, path)
+        case "Any":
+          return finishStructural(Schema.Any, representation, path)
+        case "String":
+          return reviveString(representation, path)
+        case "Number":
+          return finishStructural(Schema.Number, representation, path)
+        case "Boolean":
+          return finishStructural(Schema.Boolean, representation, path)
+        case "BigInt":
+          return finishStructural(Schema.BigInt, representation, path)
+        case "Symbol":
+          return finishStructural(Schema.Symbol, representation, path)
+        case "Literal":
+          return finishStructural(Schema.Literal(representation.literal), representation, path)
+        case "UniqueSymbol":
+          return finishStructural(Schema.UniqueSymbol(representation.symbol), representation, path)
+        case "ObjectKeyword":
+          return finishStructural(Schema.ObjectKeyword, representation, path)
+        case "Enum":
+          return finishStructural(Schema.Enum(Object.fromEntries(representation.enums)), representation, path)
+        case "TemplateLiteral": {
+          const parts = representation.parts.map((part, index) => recur(part, [...path, "parts", index]))
+          return finishStructural(
+            Schema.TemplateLiteral(parts as unknown as Schema.TemplateLiteral.Parts),
+            representation,
+            path
+          )
+        }
+        case "Arrays": {
+          const elements = representation.elements.map((element, index) => {
+            let schema = recur(element.type, [...path, "elements", index, "type"])
+            if (element.annotations !== undefined) {
+              schema = schema.annotateKey(element.annotations as Schema.Annotations.Key<unknown>)
+            }
+            return element.isOptional ? Schema.optionalKey(schema) : schema
+          })
+          const rest = representation.rest.map((item, index) => recur(item, [...path, "rest", index]))
+          const schema = Arr.isArrayNonEmpty(rest)
+            ? elements.length === 0 && rest.length === 1
+              ? Schema.Array(rest[0])
+              : Schema.TupleWithRest(Schema.Tuple(elements), rest)
+            : Schema.Tuple(elements)
+          return finishStructural(schema, representation, path)
+        }
+        case "Objects": {
+          const fields: Record<PropertyKey, Schema.Top> = {}
+          for (let index = 0; index < representation.propertySignatures.length; index++) {
+            const property = representation.propertySignatures[index]
+            let schema = recur(property.type, [...path, "propertySignatures", index, "type"])
+            if (property.annotations !== undefined) {
+              schema = schema.annotateKey(property.annotations as Schema.Annotations.Key<unknown>)
+            }
+            if (property.isOptional) {
+              schema = Schema.optionalKey(schema)
+            }
+            if (property.isMutable) {
+              schema = Schema.mutableKey(schema)
+            }
+            Object.defineProperty(fields, property.name, {
+              value: schema,
+              enumerable: true,
+              configurable: true,
+              writable: true
+            })
+          }
+          const records = representation.indexSignatures.map((indexSignature, index) =>
+            Schema.Record(
+              recur(indexSignature.parameter, [...path, "indexSignatures", index, "parameter"]) as Schema.Record.Key,
+              recur(indexSignature.type, [...path, "indexSignatures", index, "type"])
+            )
+          )
+          const schema = Arr.isArrayNonEmpty(records)
+            ? representation.propertySignatures.length === 0 && records.length === 1
+              ? records[0]
+              : Schema.StructWithRest(Schema.Struct(fields), records)
+            : Schema.Struct(fields)
+          return finishStructural(schema, representation, path)
+        }
+        case "Union": {
+          const members = representation.types.map((member, index) => recur(member, [...path, "types", index]))
+          return finishStructural(Schema.Union(members, { mode: representation.mode }), representation, path)
+        }
+      }
+    })
+  }
+
+  const definitions: Record<string, Schema.Top> = {}
+  for (const key of referenceKeys) {
+    const slot = slots.get(key)!
+    slot.body = recur(references[key], ["references", key])
+    Object.defineProperty(definitions, key, {
+      value: slot.wrapper,
+      enumerable: true,
+      configurable: true,
+      writable: true
+    })
+  }
+
+  const schemas = representations.map((representation, index) =>
+    recur(representation, singleRoot ? ["representation"] : ["representations", index])
+  ) as [Schema.Top, ...Array<Schema.Top>]
+  return { schemas, definitions }
+}
+
+/** @internal */
+export function reviveDocument(
+  document: PersistedDocument,
+  revivers: ReadonlyArray<SchemaRepresentation.AnyReviver>
+): ProjectionResult<Schema.Top> {
+  return captureRevival(() =>
+    revivePersisted([document.representation], document.references, revivers, true).schemas[0]
+  )
+}
+
+/** @internal */
+export function reviveMultiDocument(
+  document: PersistedMultiDocument,
+  revivers: ReadonlyArray<SchemaRepresentation.AnyReviver>
+): ProjectionResult<SchemaRepresentation.SchemaMultiDocument> {
+  return captureRevival(() => revivePersisted(document.representations, document.references, revivers, false))
+}
+
+/** @internal */
+export function fromJson(
+  input: unknown,
+  revivers: ReadonlyArray<SchemaRepresentation.AnyReviver>
+): ProjectionResult<Schema.Top> {
+  const document = decodePersisted(input, getPersistedCodecs().document)
+  return document._tag === "Failure" ? document : reviveDocument(document.value, revivers)
+}
+
+/** @internal */
+export function fromJsonMultiDocument(
+  input: unknown,
+  revivers: ReadonlyArray<SchemaRepresentation.AnyReviver>
+): ProjectionResult<SchemaRepresentation.SchemaMultiDocument> {
+  const document = decodePersisted(input, getPersistedCodecs().multiDocument)
+  return document._tag === "Failure" ? document : reviveMultiDocument(document.value, revivers)
+}
+
+function jsonSchemaRevivers(): ReadonlyArray<SchemaRepresentation.AnyReviver> {
+  return [
+    Schema.JsonReviver,
+    Schema.isPatternReviver,
+    Schema.isFiniteReviver,
+    Schema.isGreaterThanReviver,
+    Schema.isGreaterThanOrEqualToReviver,
+    Schema.isLessThanReviver,
+    Schema.isLessThanOrEqualToReviver,
+    Schema.isMultipleOfReviver,
+    Schema.isIntReviver,
+    Schema.isMinLengthReviver,
+    Schema.isMaxLengthReviver,
+    Schema.isMinPropertiesReviver,
+    Schema.isMaxPropertiesReviver,
+    Schema.isPropertyNamesReviver,
+    Schema.isUniqueReviver
+  ]
+}
+
+/** @internal */
+export function toSchemaFromJsonSchemaDocument(
+  document: JsonSchema.Document<"draft-2020-12">,
+  options?: SchemaRepresentation.FromJsonSchemaOptions
+): ProjectionResult<Schema.Top> {
+  const translated = fromJsonSchemaDocument(document, options)
+  return translated._tag === "Failure"
+    ? translated
+    : reviveDocument(translated.value, jsonSchemaRevivers())
+}
+
+/** @internal */
+export function toSchemaFromJsonSchemaMultiDocument(
+  document: JsonSchema.MultiDocument<"draft-2020-12">,
+  options?: SchemaRepresentation.FromJsonSchemaOptions
+): ProjectionResult<SchemaRepresentation.SchemaMultiDocument> {
+  const translated = fromJsonSchemaMultiDocument(document, options)
+  return translated._tag === "Failure"
+    ? translated
+    : reviveMultiDocument(translated.value, jsonSchemaRevivers())
+}

@@ -22,18 +22,22 @@ import * as Arr from "effect/Array"
 import * as JsonSchema from "effect/JsonSchema"
 import * as Rec from "effect/Record"
 import * as SchemaRepresentation from "effect/SchemaRepresentation"
+import * as SchemaRepresentation2 from "effect/SchemaRepresentation2"
 
 type Source = "openapi-3.0" | "openapi-3.1"
+type RepresentationBackend = "legacy" | "v2"
 
 interface GenerateOptions {
   readonly onEnter?: ((js: JsonSchema.JsonSchema) => JsonSchema.JsonSchema) | undefined
 }
 
+interface MultipartSchemaRefs {
+  readonly singleFile: string
+  readonly files: string
+}
+
 interface GenerateHttpApiOptions extends GenerateOptions {
-  readonly multipartSchemaRefs?: {
-    readonly singleFile: string
-    readonly files: string
-  } | undefined
+  readonly multipartSchemaRefs?: MultipartSchemaRefs | undefined
 }
 
 /**
@@ -49,6 +53,30 @@ interface GenerateHttpApiOptions extends GenerateOptions {
  * @since 4.0.0
  */
 export function make() {
+  return makeWithRepresentation("legacy")
+}
+
+/**
+ * Creates a stateful JSON Schema code generator backed by SchemaRepresentation2.
+ *
+ * **When to use**
+ *
+ * Use when imported roots and component definitions must share the representation-v2 revival and code-generation environment.
+ *
+ * **Details**
+ *
+ * The returned methods match {@link make}, while preserving unreachable definitions and rendering imports required by generated schema code.
+ *
+ * @see {@link make} for the legacy representation backend
+ *
+ * @category code generation
+ * @since 4.0.0
+ */
+export function make2() {
+  return makeWithRepresentation("v2")
+}
+
+function makeWithRepresentation(backend: RepresentationBackend) {
   const store: Record<string, JsonSchema.JsonSchema> = {}
 
   function addSchema(name: string, schema: JsonSchema.JsonSchema): string {
@@ -114,7 +142,8 @@ export function make() {
       renderSchemaTypeAndRuntime(generated.nameMap[i], code, typeOnly)
     )
 
-    return render("recursive declarations", recursiveDeclarations) +
+    return renderImportArtifacts(generated.codeDocument, backend === "v2" && !typeOnly) +
+      render("recursive declarations", recursiveDeclarations) +
       render("non-recursive definitions", nonRecursives) +
       render("recursive definitions", recursives) +
       render("schemas", codes)
@@ -165,7 +194,8 @@ export function make() {
       renderSchemaTypeAndRuntime(generated.nameMap[i], code, false, options?.multipartSchemaRefs)
     )
 
-    return render("recursive declarations", recursiveDeclarations) +
+    return renderImportArtifacts(generated.codeDocument, backend === "v2") +
+      render("recursive declarations", recursiveDeclarations) +
       render("non-recursive definitions", nonRecursives) +
       render("recursive definitions", recursives) +
       render("schemas", codes)
@@ -174,7 +204,7 @@ export function make() {
   function makeCodeDocument(
     source: Source,
     components: JsonSchema.Definitions,
-    options?: GenerateOptions
+    options?: GenerateHttpApiOptions
   ): {
     readonly nameMap: Array<string>
     readonly codeDocument: SchemaRepresentation.CodeDocument
@@ -182,7 +212,7 @@ export function make() {
     const nameMap: Array<string> = []
     const schemas: Array<JsonSchema.JsonSchema> = []
 
-    const definitions: JsonSchema.Definitions = Rec.map(
+    let definitions: JsonSchema.Definitions = Rec.map(
       components,
       (js) => fromSchemaOpenApi(source, js).schema
     )
@@ -195,24 +225,35 @@ export function make() {
     if (!Arr.isArrayNonEmpty(schemas)) {
       return
     }
+    if (options?.multipartSchemaRefs !== undefined) {
+      definitions = omitSupersededMultipartDefinitions(definitions, schemas, options.multipartSchemaRefs)
+    }
 
-    const multiDocument: SchemaRepresentation.MultiDocument = SchemaRepresentation.fromJsonSchemaMultiDocument({
-      dialect: "draft-2020-12",
+    const document = {
+      dialect: "draft-2020-12" as const,
       schemas,
       definitions
-    }, {
-      onEnter(js) {
+    }
+    const importerOptions = {
+      onEnter(js: JsonSchema.JsonSchema) {
         const out = { ...js }
         if (out.type === "object" && out.additionalProperties === undefined) {
           out.additionalProperties = false
         }
-        return options?.onEnter?.(out) ?? out
+        return options?.onEnter === undefined ? out : options.onEnter(out)
       }
-    })
+    }
+    const codeDocument: SchemaRepresentation.CodeDocument = backend === "v2"
+      ? SchemaRepresentation2.toCodeDocumentFromSchemaMultiDocument(
+        SchemaRepresentation2.toSchemaFromJsonSchemaMultiDocument(document, importerOptions)
+      )
+      : SchemaRepresentation.toCodeDocument(
+        SchemaRepresentation.fromJsonSchemaMultiDocument(document, importerOptions)
+      )
 
     return {
       nameMap,
-      codeDocument: SchemaRepresentation.toCodeDocument(multiDocument)
+      codeDocument
     }
   }
 
@@ -232,10 +273,7 @@ function renderSchemaTypeAndRuntime(
   $ref: string,
   code: SchemaRepresentation.Code,
   typeOnly: boolean,
-  multipartSchemaRefs?: {
-    readonly singleFile: string
-    readonly files: string
-  }
+  multipartSchemaRefs?: MultipartSchemaRefs
 ) {
   if (!typeOnly && multipartSchemaRefs !== undefined) {
     if ($ref === multipartSchemaRefs.singleFile) {
@@ -273,6 +311,72 @@ function renderRecursiveReferenceDeclaration(
 function render(title: string, as: ReadonlyArray<string>) {
   if (as.length === 0) return ""
   return "// " + title + "\n" + as.join("\n") + "\n"
+}
+
+function renderImportArtifacts(codeDocument: SchemaRepresentation.CodeDocument, enabled: boolean): string {
+  if (!enabled) return ""
+  const imports = codeDocument.artifacts.flatMap((artifact) =>
+    artifact._tag === "Import" ? [artifact.importDeclaration] : []
+  )
+  return imports.length === 0 ? "" : imports.join("\n") + "\n"
+}
+
+function omitSupersededMultipartDefinitions(
+  definitions: JsonSchema.Definitions,
+  schemas: ReadonlyArray<JsonSchema.JsonSchema>,
+  multipartSchemaRefs: MultipartSchemaRefs
+): JsonSchema.Definitions {
+  const rootReferences = collectReferenceKeys(schemas)
+  const multipartReferences = new Set([multipartSchemaRefs.singleFile, multipartSchemaRefs.files])
+  const output: JsonSchema.Definitions = {}
+
+  for (const [key, schema] of Object.entries(definitions)) {
+    const superseded = !multipartReferences.has(key) && !rootReferences.has(key) &&
+      referencesAny(schema, multipartReferences)
+    if (!superseded) {
+      Object.defineProperty(output, key, {
+        value: schema,
+        enumerable: true,
+        configurable: true,
+        writable: true
+      })
+    }
+  }
+  return output
+}
+
+function collectReferenceKeys(input: unknown): Set<string> {
+  const references = new Set<string>()
+  visitReferences(input, ($ref) => {
+    const token = $ref.split("/").at(-1)
+    if (token !== undefined && token.length > 0) {
+      references.add(token.replaceAll("~1", "/").replaceAll("~0", "~"))
+    }
+  })
+  return references
+}
+
+function referencesAny(input: unknown, keys: ReadonlySet<string>): boolean {
+  const references = collectReferenceKeys(input)
+  for (const key of references) {
+    if (keys.has(key)) return true
+  }
+  return false
+}
+
+function visitReferences(input: unknown, onReference: ($ref: string) => void): void {
+  if (Array.isArray(input)) {
+    for (const value of input) visitReferences(value, onReference)
+    return
+  }
+  if (typeof input !== "object" || input === null) return
+  for (const [key, value] of Object.entries(input)) {
+    if (key === "$ref" && typeof value === "string") {
+      onReference(value)
+    } else {
+      visitReferences(value, onReference)
+    }
+  }
 }
 
 const tokenPattern = /[A-Za-z_$][A-Za-z0-9_$]*/g

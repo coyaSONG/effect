@@ -24,7 +24,7 @@ import * as Stream from "effect/Stream"
 import type { Span } from "effect/Tracer"
 import type { Mutable, Simplify } from "effect/Types"
 import * as AiError from "effect/unstable/ai/AiError"
-import { toCodecAnthropic } from "effect/unstable/ai/AnthropicStructuredOutput"
+import { toCodecAnthropic2 } from "effect/unstable/ai/AnthropicStructuredOutput"
 import * as IdGenerator from "effect/unstable/ai/IdGenerator"
 import * as LanguageModel from "effect/unstable/ai/LanguageModel"
 import * as AiModel from "effect/unstable/ai/Model"
@@ -712,7 +712,7 @@ export const make = Effect.fnUntraced(function*({ model, config: providerConfig 
   )
 
   return yield* LanguageModel.make({
-    codecTransformer: toCodecAnthropic,
+    codecTransformer: toCodecAnthropic2,
     generateText: Effect.fnUntraced(function*(options) {
       const config = yield* makeConfig
       const toolNameMapper = new Tool.NameMapper(options.tools)
@@ -3024,19 +3024,19 @@ const unsupportedSchemaError = (error: unknown, method: string): AiError.AiError
 
 const tryCodecTransform = <S extends Schema.Constraint>(schema: S, method: string) =>
   Effect.try({
-    try: () => toCodecAnthropic(schema),
+    try: () => toCodecAnthropic2(schema),
     catch: (error) => unsupportedSchemaError(error, method)
   })
 
 const tryJsonSchema = <S extends Schema.Constraint>(schema: S, method: string) =>
   Effect.try({
-    try: () => Tool.getJsonSchemaFromSchema(schema, { transformer: toCodecAnthropic }),
+    try: () => Tool.getJsonSchemaFromSchema2(schema, { transformer: toCodecAnthropic2 }),
     catch: (error) => unsupportedSchemaError(error, method)
   })
 
 const tryToolJsonSchema = <T extends Tool.Any | Tool.AnyDynamic>(tool: T, method: string) =>
   Effect.try({
-    try: () => Tool.getJsonSchema(tool, { transformer: toCodecAnthropic }),
+    try: () => Tool.getJsonSchema2(tool, { transformer: toCodecAnthropic2 }),
     catch: (error) => unsupportedSchemaError(error, method)
   })
 

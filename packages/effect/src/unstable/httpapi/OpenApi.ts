@@ -21,6 +21,7 @@ import * as Option from "../../Option.ts"
 import * as Schema from "../../Schema.ts"
 import * as SchemaAST from "../../SchemaAST.ts"
 import * as SchemaRepresentation from "../../SchemaRepresentation.ts"
+import * as SchemaRepresentation2 from "../../SchemaRepresentation2.ts"
 import * as HttpMethod from "../http/HttpMethod.ts"
 import * as HttpApi from "./HttpApi.ts"
 import * as HttpApiEndpoint from "./HttpApiEndpoint.ts"
@@ -211,6 +212,23 @@ export const annotations: (
 })
 
 const apiCache = new WeakMap<HttpApi.Constraint, OpenAPISpec>()
+const apiCache2 = new WeakMap<HttpApi.Constraint, OpenAPISpec>()
+
+type CompileSchemas = (
+  asts: readonly [SchemaAST.AST, ...Array<SchemaAST.AST>]
+) => JsonSchema.MultiDocument<"openapi-3.1">
+
+const compileSchemasLegacy: CompileSchemas = (asts) =>
+  JsonSchema.toMultiDocumentOpenApi3_1(
+    SchemaRepresentation.toJsonSchemaMultiDocument(SchemaRepresentation.fromASTs(asts))
+  )
+
+const compileSchemas2: CompileSchemas = (asts) =>
+  JsonSchema.toMultiDocumentOpenApi3_1(
+    SchemaRepresentation2.toJsonSchemaMultiDocument(
+      SchemaRepresentation2.fromASTs(Arr.map(asts, (ast) => SchemaAST.toEncoded(ast)))
+    )
+  )
 
 /**
  * This function checks if a given tag exists within the provided context. If
@@ -251,7 +269,37 @@ function processAnnotation<Services, S, I>(
 export function fromApi<Id extends string, Groups extends HttpApiGroup.Constraint>(
   api: HttpApi.HttpApi<Id, Groups>
 ): OpenAPISpec {
-  const cached = apiCache.get(api)
+  return fromApiWith(api, apiCache, compileSchemasLegacy)
+}
+
+/**
+ * Converts an `HttpApi` instance into an OpenAPI specification through the v2 representation pipeline.
+ *
+ * **When to use**
+ *
+ * Use to verify OpenAPI generation through the open representation pipeline during the shadow migration.
+ *
+ * **Details**
+ *
+ * Schema ASTs are projected to their encoded side before lowering. Results are cached by `HttpApi` identity separately from {@link fromApi}.
+ *
+ * @see {@link fromApi} for the legacy representation path
+ *
+ * @category constructors
+ * @since 4.0.0
+ */
+export function fromApi2<Id extends string, Groups extends HttpApiGroup.Constraint>(
+  api: HttpApi.HttpApi<Id, Groups>
+): OpenAPISpec {
+  return fromApiWith(api, apiCache2, compileSchemas2)
+}
+
+function fromApiWith<Id extends string, Groups extends HttpApiGroup.Constraint>(
+  api: HttpApi.HttpApi<Id, Groups>,
+  cache: WeakMap<HttpApi.Constraint, OpenAPISpec>,
+  compileSchemas: CompileSchemas
+): OpenAPISpec {
+  const cached = cache.get(api)
   if (cached !== undefined) {
     return cached
   }
@@ -599,12 +647,7 @@ export function fromApi<Id extends string, Groups extends HttpApiGroup.Constrain
   }
 
   if (Arr.isArrayNonEmpty(pathOps)) {
-    const multiDocument = SchemaRepresentation.fromASTs(
-      Arr.map(pathOps, (op) => op.ast)
-    )
-    const jsonSchemaMultiDocument = JsonSchema.toMultiDocumentOpenApi3_1(
-      SchemaRepresentation.toJsonSchemaMultiDocument(multiDocument)
-    )
+    const jsonSchemaMultiDocument = compileSchemas(Arr.map(pathOps, (op) => op.ast))
     const patchOps: Array<JsonPatch.JsonPatchOperation> = pathOps.map((op, i) => {
       const oppath = escapePath(op.path)
       const value = jsonSchemaMultiDocument.schemas[i]
@@ -639,7 +682,7 @@ export function fromApi<Id extends string, Groups extends HttpApiGroup.Constrain
     spec = transformFn(spec) as OpenAPISpec
   })
 
-  apiCache.set(api, spec)
+  cache.set(api, spec)
 
   return spec
 }

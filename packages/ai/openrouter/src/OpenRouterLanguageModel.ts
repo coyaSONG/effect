@@ -25,11 +25,11 @@ import * as Stream from "effect/Stream"
 import type { Span } from "effect/Tracer"
 import type { DeepMutable, Mutable, Simplify } from "effect/Types"
 import * as AiError from "effect/unstable/ai/AiError"
-import { toCodecAnthropic } from "effect/unstable/ai/AnthropicStructuredOutput"
+import { toCodecAnthropic2 } from "effect/unstable/ai/AnthropicStructuredOutput"
 import * as IdGenerator from "effect/unstable/ai/IdGenerator"
 import * as LanguageModel from "effect/unstable/ai/LanguageModel"
 import * as AiModel from "effect/unstable/ai/Model"
-import { toCodecOpenAI } from "effect/unstable/ai/OpenAiStructuredOutput"
+import { toCodecOpenAI2 } from "effect/unstable/ai/OpenAiStructuredOutput"
 import type * as Prompt from "effect/unstable/ai/Prompt"
 import type * as Response from "effect/unstable/ai/Response"
 import { addGenAIAnnotations } from "effect/unstable/ai/Telemetry"
@@ -570,7 +570,7 @@ export const make = Effect.fnUntraced(function*({ model, config: providerConfig 
   )
 
   return yield* LanguageModel.make({
-    codecTransformer: toCodecOpenAI,
+    codecTransformer: toCodecOpenAI2,
     generateText: Effect.fnUntraced(
       function*(options) {
         const config = yield* makeConfig
@@ -1743,7 +1743,7 @@ const findFirstReasoningDetails = (content: ReadonlyArray<Prompt.AssistantMessag
 
 const getCodecTransformer = (model: string): LanguageModel.CodecTransformer => {
   if (model.startsWith("anthropic/") || model.startsWith("claude-")) {
-    return toCodecAnthropic
+    return toCodecAnthropic2
   }
   if (
     model.startsWith("openai/") ||
@@ -1752,9 +1752,9 @@ const getCodecTransformer = (model: string): LanguageModel.CodecTransformer => {
     model.startsWith("o3-") ||
     model.startsWith("o4-")
   ) {
-    return toCodecOpenAI
+    return toCodecOpenAI2
   }
-  return LanguageModel.defaultCodecTransformer
+  return LanguageModel.defaultCodecTransformer2
 }
 
 const unsupportedSchemaError = (error: unknown, method: string): AiError.AiError =>
@@ -1772,7 +1772,7 @@ const tryJsonSchema = <S extends Schema.Constraint>(
   transformer: LanguageModel.CodecTransformer
 ) =>
   Effect.try({
-    try: () => Tool.getJsonSchemaFromSchema(schema, { transformer }),
+    try: () => Tool.getJsonSchemaFromSchema2(schema, { transformer }),
     catch: (error) => unsupportedSchemaError(error, method)
   })
 

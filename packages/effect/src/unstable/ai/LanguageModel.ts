@@ -220,6 +220,24 @@ export type CodecTransformer = <T, E, RD, RE>(schema: Schema.ConstraintCodec<T, 
 export const defaultCodecTransformer: CodecTransformer = InternalCodecTransformer.defaultCodecTransformer
 
 /**
+ * Default codec transformer that generates JSON Schema through the open v2 compiler.
+ *
+ * **When to use**
+ *
+ * Use to verify provider integrations against the v2 representation pipeline during the shadow migration.
+ *
+ * **Details**
+ *
+ * The transformer projects the codec to its encoded side, resolves a top-level `$ref`, and copies schema definitions into `$defs`.
+ *
+ * @see {@link defaultCodecTransformer} for the legacy JSON Schema path
+ *
+ * @category services
+ * @since 4.0.0
+ */
+export const defaultCodecTransformer2: CodecTransformer = InternalCodecTransformer.defaultCodecTransformer2
+
+/**
  * Configuration options for text generation.
  *
  * @category options

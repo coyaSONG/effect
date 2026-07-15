@@ -59,12 +59,47 @@ export function toCodecAnthropic<T, E, RD, RE>(
   readonly codec: Schema.ConstraintCodec<T, unknown, RD, RE>
   readonly jsonSchema: JsonSchema.JsonSchema
 } {
+  return toCodecAnthropicWith(schema, Schema.toJsonSchemaDocument)
+}
+
+/**
+ * Converts a `Schema.Codec` to Anthropic structured-output JSON Schema through the open v2 compiler.
+ *
+ * **When to use**
+ *
+ * Use to verify Anthropic structured output against the v2 representation pipeline during the shadow migration.
+ *
+ * **Details**
+ *
+ * Provider-specific codec rewrites are applied before the encoded schema is compiled, and the resulting JSON Schema receives the same Anthropic compatibility handling as the legacy path.
+ *
+ * @see {@link toCodecAnthropic} for the legacy JSON Schema path
+ *
+ * @category Codec Transformation
+ * @since 4.0.0
+ */
+export function toCodecAnthropic2<T, E, RD, RE>(
+  schema: Schema.ConstraintCodec<T, E, RD, RE>
+): {
+  readonly codec: Schema.ConstraintCodec<T, unknown, RD, RE>
+  readonly jsonSchema: JsonSchema.JsonSchema
+} {
+  return toCodecAnthropicWith(schema, Schema.toJsonSchemaDocument2)
+}
+
+function toCodecAnthropicWith<T, E, RD, RE>(
+  schema: Schema.ConstraintCodec<T, E, RD, RE>,
+  toJsonSchemaDocument: (schema: Schema.Constraint) => JsonSchema.Document<"draft-2020-12">
+): {
+  readonly codec: Schema.ConstraintCodec<T, unknown, RD, RE>
+  readonly jsonSchema: JsonSchema.JsonSchema
+} {
   const to = schema.ast
   const from = recur(SchemaAST.toEncoded(to))
   const codec = from === to
     ? schema
     : Schema.make<typeof schema>(SchemaAST.decodeTo(from, to, SchemaTransformation.passthrough()))
-  const document = JsonSchema.resolveTopLevel$ref(Schema.toJsonSchemaDocument(codec))
+  const document = JsonSchema.resolveTopLevel$ref(toJsonSchemaDocument(codec))
   const jsonSchema = { ...document.schema }
   if (Object.keys(document.definitions).length > 0) {
     jsonSchema.$defs = document.definitions
