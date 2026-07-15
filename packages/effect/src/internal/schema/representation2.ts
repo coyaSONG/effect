@@ -2,23 +2,21 @@ import * as Arr from "../../Array.ts"
 import * as Equal from "../../Equal.ts"
 import { escapeToken, unescapeToken } from "../../JsonPointer.ts"
 import type * as JsonSchema from "../../JsonSchema.ts"
+import { remainder } from "../../Number.ts"
 import * as Predicate from "../../Predicate.ts"
 import * as RegEx from "../../RegExp.ts"
-import * as Result from "../../Result.ts"
 import type * as Schema from "../../Schema.ts"
 import * as SchemaAST from "../../SchemaAST.ts"
 import type * as SchemaRepresentation from "../../SchemaRepresentation2.ts"
+import { errorWithPath } from "../errors.ts"
 import * as InternalAnnotations from "./annotations.ts"
 import * as InternalSchema from "./schema.ts"
 
-/** @internal */
-export type ProjectionResult<A> =
-  | { readonly _tag: "Success"; readonly value: A }
-  | { readonly _tag: "Failure"; readonly issue: SchemaRepresentation.SchemaRepresentationIssue }
+type Path = ReadonlyArray<string | number>
 
 export type StrictJsonResult =
   | { readonly _tag: "Success"; readonly value: Schema.Json }
-  | { readonly _tag: "Failure"; readonly path: SchemaRepresentation.Path; readonly actual: unknown }
+  | { readonly _tag: "Failure"; readonly path: Path; readonly actual: unknown }
 
 type ArrayDataResult =
   | { readonly _tag: "Success"; readonly values: ReadonlyArray<unknown> }
@@ -28,19 +26,11 @@ type RepresentationPolicy = "forbidden" | "optional" | "required"
 
 export const hasOwn = Object.prototype.hasOwnProperty
 
-export function success<A>(value: A): ProjectionResult<A> {
-  return { _tag: "Success", value }
-}
-
-export function failure<A>(issue: SchemaRepresentation.SchemaRepresentationIssue): ProjectionResult<A> {
-  return { _tag: "Failure", issue }
-}
-
-function invalidStructuralValue<A>(
-  path: SchemaRepresentation.Path,
-  actual: unknown
-): ProjectionResult<A> {
-  return failure({ _tag: "InvalidStructuralValue", path, actual })
+function invalidStructuralValue(
+  path: Path,
+  _actual: unknown
+): never {
+  throw errorWithPath("Invalid structural value", path)
 }
 
 function isDataDescriptor(descriptor: PropertyDescriptor | undefined): descriptor is PropertyDescriptor & {
@@ -80,14 +70,14 @@ function readArrayData(input: unknown): ArrayDataResult {
   return { _tag: "Success", values }
 }
 
-function strictJsonFailure(path: SchemaRepresentation.Path, actual: unknown): StrictJsonResult {
+function strictJsonFailure(path: Path, actual: unknown): StrictJsonResult {
   return { _tag: "Failure", path, actual }
 }
 
 export function copyStrictJson(
   input: unknown,
   ancestors: ReadonlySet<object> = new Set(),
-  path: SchemaRepresentation.Path = []
+  path: Path = []
 ): StrictJsonResult {
   if (input === null || typeof input === "string" || typeof input === "boolean") {
     return { _tag: "Success", value: input }
@@ -151,9 +141,9 @@ export function copyStrictJson(
 
 function projectArray<A, B>(
   input: ReadonlyArray<A>,
-  path: SchemaRepresentation.Path,
-  f: (value: A, path: SchemaRepresentation.Path) => ProjectionResult<B>
-): ProjectionResult<ReadonlyArray<B>> {
+  path: Path,
+  f: (value: A, path: Path) => B
+): ReadonlyArray<B> {
   const data = readArrayData(input)
   if (data._tag === "Failure") {
     return invalidStructuralValue(path, input)
@@ -161,12 +151,9 @@ function projectArray<A, B>(
   const out = new Array<B>(data.values.length)
   for (let index = 0; index < data.values.length; index++) {
     const value = f(data.values[index] as A, [...path, index])
-    if (value._tag === "Failure") {
-      return value
-    }
-    out[index] = value.value
+    out[index] = value
   }
-  return success(out)
+  return out
 }
 
 function annotationsField<A>(annotations: A | undefined): { readonly annotations?: A | undefined } {
@@ -188,9 +175,9 @@ function defineAnnotation(
 
 function projectRepresentationAnnotation(
   input: unknown,
-  path: SchemaRepresentation.Path,
+  path: Path,
   ancestors: ReadonlySet<object>
-): ProjectionResult<SchemaRepresentation.RepresentationAnnotation<SchemaRepresentation.PersistedRepresentation>> {
+): SchemaRepresentation.RepresentationAnnotation<SchemaRepresentation.PersistedRepresentation> {
   if (
     typeof input !== "object" ||
     input === null ||
@@ -208,7 +195,7 @@ function projectRepresentationAnnotation(
     const descriptor = descriptors[key]
     if (!isDataDescriptor(descriptor) || descriptor.enumerable !== true) {
       if (key === "payload") {
-        return failure({ _tag: "InvalidRepresentationPayload", path: [...path, "payload"] })
+        throw errorWithPath("Invalid representation payload", [...path, "payload"])
       }
       return invalidStructuralValue([...path, key], input)
     }
@@ -227,47 +214,40 @@ function projectRepresentationAnnotation(
 
   const payloadDescriptor = descriptors.payload
   if (!isDataDescriptor(payloadDescriptor) || payloadDescriptor.enumerable !== true) {
-    return failure({ _tag: "InvalidRepresentationPayload", path: [...path, "payload"], id })
+    throw errorWithPath(`Invalid representation payload for ${id}`, [...path, "payload"])
   }
   const payload = copyStrictJson(payloadDescriptor.value)
   if (payload._tag === "Failure") {
-    return failure({ _tag: "InvalidRepresentationPayload", path: [...path, "payload"], id })
+    throw errorWithPath(`Invalid representation payload for ${id}`, [...path, "payload"])
   }
 
   const schemasDescriptor = descriptors.schemas
   if (
     schemasDescriptor === undefined || (isDataDescriptor(schemasDescriptor) && schemasDescriptor.value === undefined)
   ) {
-    return success({ id, payload: payload.value })
-  }
-  if (!isDataDescriptor(schemasDescriptor) || schemasDescriptor.enumerable !== true) {
-    return invalidStructuralValue([...path, "schemas"], input)
+    return { id, payload: payload.value }
   }
   const schemas = projectArray(
     schemasDescriptor.value as ReadonlyArray<SchemaRepresentation.LiveRepresentation>,
     [...path, "schemas"],
     (representation, representationPath) => projectRepresentation(representation, representationPath, ancestors)
   )
-  if (schemas._tag === "Failure") {
-    return schemas
-  }
-  return success({ id, payload: payload.value, schemas: schemas.value })
+  return { id, payload: payload.value, schemas }
 }
 
 function projectAnnotationBag(
   input: unknown,
-  path: SchemaRepresentation.Path,
+  path: Path,
   representationPolicy: RepresentationPolicy,
   ancestors: ReadonlySet<object>,
   excludedKeys: ReadonlySet<string> = new Set()
-): ProjectionResult<
-  SchemaRepresentation.PersistedOpaqueAnnotations<SchemaRepresentation.PersistedRepresentation> | undefined
-> {
+): SchemaRepresentation.PersistedOpaqueAnnotations<SchemaRepresentation.PersistedRepresentation> | undefined {
   const representationPath = [...path, "representation"]
   if (input === undefined) {
-    return representationPolicy === "required"
-      ? failure({ _tag: "MissingRepresentation", path: representationPath })
-      : success(undefined)
+    if (representationPolicy === "required") {
+      throw errorWithPath("Missing representation annotation", representationPath)
+    }
+    return undefined
   }
   if (typeof input !== "object" || input === null || Array.isArray(input)) {
     return invalidStructuralValue(path, input)
@@ -302,69 +282,62 @@ function projectAnnotationBag(
     }
     if (descriptor.value === undefined) {
       if (representationPolicy === "required") {
-        return failure({ _tag: "MissingRepresentation", path: representationPath })
+        throw errorWithPath("Missing representation annotation", representationPath)
       }
     } else {
       const representation = projectRepresentationAnnotation(descriptor.value, representationPath, ancestors)
-      if (representation._tag === "Failure") {
-        return representation
-      }
-      defineAnnotation(out, "representation", representation.value)
+      defineAnnotation(out, "representation", representation)
     }
   } else if (representationPolicy === "required") {
-    return failure({ _tag: "MissingRepresentation", path: representationPath })
+    throw errorWithPath("Missing representation annotation", representationPath)
   }
 
-  return success(
-    Reflect.ownKeys(out).length === 0
-      ? undefined
-      : out as SchemaRepresentation.PersistedOpaqueAnnotations<SchemaRepresentation.PersistedRepresentation>
-  )
+  return Reflect.ownKeys(out).length === 0
+    ? undefined
+    : out as SchemaRepresentation.PersistedOpaqueAnnotations<SchemaRepresentation.PersistedRepresentation>
 }
 
 function projectNodeAnnotations(
   input: unknown,
-  path: SchemaRepresentation.Path,
+  path: Path,
   representationPolicy: RepresentationPolicy,
   ancestors: ReadonlySet<object>,
   excludedKeys?: ReadonlySet<string>
-): ProjectionResult<SchemaRepresentation.PersistedAnnotations["node"] | undefined> {
+): SchemaRepresentation.PersistedAnnotations["node"] | undefined {
   return projectAnnotationBag(input, path, representationPolicy, ancestors, excludedKeys)
 }
 
 function projectFilterAnnotations(
   input: unknown,
-  path: SchemaRepresentation.Path,
+  path: Path,
   representationPolicy: RepresentationPolicy,
   ancestors: ReadonlySet<object>
-): ProjectionResult<SchemaRepresentation.PersistedAnnotations["filter"] | undefined> {
+): SchemaRepresentation.PersistedAnnotations["filter"] | undefined {
   return projectAnnotationBag(input, path, representationPolicy, ancestors)
 }
 
 function projectKeyAnnotations(
   input: unknown,
-  path: SchemaRepresentation.Path,
+  path: Path,
   ancestors: ReadonlySet<object>
-): ProjectionResult<SchemaRepresentation.PersistedAnnotations["key"] | undefined> {
+): SchemaRepresentation.PersistedAnnotations["key"] | undefined {
   const annotations = projectAnnotationBag(input, path, "forbidden", ancestors)
-  return annotations._tag === "Failure"
-    ? annotations
-    : success(annotations.value as SchemaRepresentation.PersistedAnnotations["key"] | undefined)
+  return annotations as SchemaRepresentation.PersistedAnnotations["key"] | undefined
 }
 
 function projectChecks(
   checks: ReadonlyArray<SchemaRepresentation.Check<SchemaRepresentation.LiveAnnotations>>,
-  path: SchemaRepresentation.Path,
+  path: Path,
   ancestors: ReadonlySet<object>
-): ProjectionResult<ReadonlyArray<SchemaRepresentation.Check<SchemaRepresentation.PersistedAnnotations>>> {
+): ReadonlyArray<SchemaRepresentation.Check<SchemaRepresentation.PersistedAnnotations>> {
   return projectArray(checks, path, (check, checkPath) => projectCheck(check, checkPath, ancestors))
 }
 
 function projectCheck(
   check: SchemaRepresentation.Check<SchemaRepresentation.LiveAnnotations>,
-  path: SchemaRepresentation.Path,
+  path: Path,
   ancestors: ReadonlySet<object>
-): ProjectionResult<SchemaRepresentation.Check<SchemaRepresentation.PersistedAnnotations>> {
+): SchemaRepresentation.Check<SchemaRepresentation.PersistedAnnotations> {
   if (typeof check !== "object" || check === null || ancestors.has(check)) {
     return invalidStructuralValue(path, check)
   }
@@ -379,17 +352,14 @@ function projectCheck(
         "required",
         nextAncestors
       )
-      if (annotations._tag === "Failure") {
-        return annotations
-      }
       if (typeof check.aborted !== "boolean") {
         return invalidStructuralValue([...path, "aborted"], check.aborted)
       }
-      return success({
+      return {
         _tag: "Filter",
         aborted: check.aborted,
-        ...annotationsField(annotations.value)
-      })
+        ...annotationsField(annotations)
+      }
     }
     case "FilterGroup": {
       const annotations = projectFilterAnnotations(
@@ -398,33 +368,27 @@ function projectCheck(
         "optional",
         nextAncestors
       )
-      if (annotations._tag === "Failure") {
-        return annotations
-      }
       const checks = projectChecks(check.checks, [...path, "checks"], nextAncestors)
-      if (checks._tag === "Failure") {
-        return checks
-      }
-      if (checks.value.length === 0) {
+      if (checks.length === 0) {
         return invalidStructuralValue([...path, "checks"], check.checks)
       }
-      return success({
+      return {
         _tag: "FilterGroup",
-        checks: checks.value as readonly [
+        checks: checks as readonly [
           SchemaRepresentation.Check<SchemaRepresentation.PersistedAnnotations>,
           ...Array<SchemaRepresentation.Check<SchemaRepresentation.PersistedAnnotations>>
         ],
-        ...annotationsField(annotations.value)
-      })
+        ...annotationsField(annotations)
+      }
     }
   }
 }
 
 function projectRepresentation(
   representation: SchemaRepresentation.LiveRepresentation,
-  path: SchemaRepresentation.Path,
+  path: Path,
   ancestors: ReadonlySet<object> = new Set()
-): ProjectionResult<SchemaRepresentation.PersistedRepresentation> {
+): SchemaRepresentation.PersistedRepresentation {
   if (typeof representation !== "object" || representation === null || ancestors.has(representation)) {
     return invalidStructuralValue(path, representation)
   }
@@ -434,7 +398,7 @@ function projectRepresentation(
   switch (representation._tag) {
     case "Reference":
       return typeof representation.$ref === "string" && representation.$ref.length > 0
-        ? success({ _tag: "Reference", $ref: representation.$ref })
+        ? { _tag: "Reference", $ref: representation.$ref }
         : invalidStructuralValue([...path, "$ref"], representation.$ref)
     case "Declaration": {
       const annotations = projectNodeAnnotations(
@@ -443,27 +407,18 @@ function projectRepresentation(
         "required",
         nextAncestors
       )
-      if (annotations._tag === "Failure") {
-        return annotations
-      }
       const typeParameters = projectArray(
         representation.typeParameters,
         [...path, "typeParameters"],
         (typeParameter, typeParameterPath) => projectRepresentation(typeParameter, typeParameterPath, nextAncestors)
       )
-      if (typeParameters._tag === "Failure") {
-        return typeParameters
-      }
       const checks = projectChecks(representation.checks, [...path, "checks"], nextAncestors)
-      if (checks._tag === "Failure") {
-        return checks
-      }
-      return success({
+      return {
         _tag: "Declaration",
-        typeParameters: typeParameters.value,
-        checks: checks.value,
-        ...annotationsField(annotations.value)
-      })
+        typeParameters,
+        checks,
+        ...annotationsField(annotations)
+      }
     }
     case "Suspend": {
       const annotations = projectNodeAnnotations(
@@ -472,26 +427,17 @@ function projectRepresentation(
         "forbidden",
         nextAncestors
       )
-      if (annotations._tag === "Failure") {
-        return annotations
-      }
       const checks = projectChecks(representation.checks, [...path, "checks"], nextAncestors)
-      if (checks._tag === "Failure") {
-        return checks
-      }
-      if (checks.value.length !== 0) {
+      if (checks.length !== 0) {
         return invalidStructuralValue([...path, "checks"], representation.checks)
       }
       const thunk = projectRepresentation(representation.thunk, [...path, "thunk"], nextAncestors)
-      if (thunk._tag === "Failure") {
-        return thunk
-      }
-      return success({
+      return {
         _tag: "Suspend",
         checks: [],
-        thunk: thunk.value,
-        ...annotationsField(annotations.value)
-      })
+        thunk,
+        ...annotationsField(annotations)
+      }
     }
     case "Null":
     case "Undefined":
@@ -510,18 +456,12 @@ function projectRepresentation(
         "forbidden",
         nextAncestors
       )
-      if (annotations._tag === "Failure") {
-        return annotations
-      }
       const checks = projectChecks(representation.checks, [...path, "checks"], nextAncestors)
-      if (checks._tag === "Failure") {
-        return checks
-      }
-      return success({
+      return {
         _tag: representation._tag,
-        checks: checks.value,
-        ...annotationsField(annotations.value)
-      } as SchemaRepresentation.PersistedRepresentation)
+        checks,
+        ...annotationsField(annotations)
+      } as SchemaRepresentation.PersistedRepresentation
     }
     case "String": {
       const annotations = projectNodeAnnotations(
@@ -531,31 +471,22 @@ function projectRepresentation(
         nextAncestors,
         new Set(["contentMediaType", "contentSchema"])
       )
-      if (annotations._tag === "Failure") {
-        return annotations
-      }
       const checks = projectChecks(representation.checks, [...path, "checks"], nextAncestors)
-      if (checks._tag === "Failure") {
-        return checks
-      }
       if (representation.contentMediaType !== undefined && typeof representation.contentMediaType !== "string") {
         return invalidStructuralValue([...path, "contentMediaType"], representation.contentMediaType)
       }
       const contentSchema = representation.contentSchema === undefined
-        ? success<SchemaRepresentation.PersistedRepresentation | undefined>(undefined)
+        ? undefined
         : projectRepresentation(representation.contentSchema, [...path, "contentSchema"], nextAncestors)
-      if (contentSchema._tag === "Failure") {
-        return contentSchema
-      }
-      return success({
+      return {
         _tag: "String",
-        checks: checks.value,
-        ...annotationsField(annotations.value),
+        checks,
+        ...annotationsField(annotations),
         ...(representation.contentMediaType === undefined
           ? undefined
           : { contentMediaType: representation.contentMediaType }),
-        ...(contentSchema.value === undefined ? undefined : { contentSchema: contentSchema.value })
-      })
+        ...(contentSchema === undefined ? undefined : { contentSchema })
+      }
     }
     case "Literal": {
       const annotations = projectNodeAnnotations(
@@ -564,13 +495,7 @@ function projectRepresentation(
         "forbidden",
         nextAncestors
       )
-      if (annotations._tag === "Failure") {
-        return annotations
-      }
       const checks = projectChecks(representation.checks, [...path, "checks"], nextAncestors)
-      if (checks._tag === "Failure") {
-        return checks
-      }
       if (
         typeof representation.literal !== "string" &&
         typeof representation.literal !== "number" &&
@@ -579,12 +504,12 @@ function projectRepresentation(
       ) {
         return invalidStructuralValue([...path, "literal"], representation.literal)
       }
-      return success({
+      return {
         _tag: "Literal",
         literal: representation.literal,
-        checks: checks.value,
-        ...annotationsField(annotations.value)
-      })
+        checks,
+        ...annotationsField(annotations)
+      }
     }
     case "UniqueSymbol": {
       const annotations = projectNodeAnnotations(
@@ -593,22 +518,16 @@ function projectRepresentation(
         "forbidden",
         nextAncestors
       )
-      if (annotations._tag === "Failure") {
-        return annotations
-      }
       const checks = projectChecks(representation.checks, [...path, "checks"], nextAncestors)
-      if (checks._tag === "Failure") {
-        return checks
-      }
       if (typeof representation.symbol !== "symbol" || globalThis.Symbol.keyFor(representation.symbol) === undefined) {
         return invalidStructuralValue([...path, "symbol"], representation.symbol)
       }
-      return success({
+      return {
         _tag: "UniqueSymbol",
         symbol: representation.symbol,
-        checks: checks.value,
-        ...annotationsField(annotations.value)
-      })
+        checks,
+        ...annotationsField(annotations)
+      }
     }
     case "Enum": {
       const annotations = projectNodeAnnotations(
@@ -617,13 +536,7 @@ function projectRepresentation(
         "forbidden",
         nextAncestors
       )
-      if (annotations._tag === "Failure") {
-        return annotations
-      }
       const checks = projectChecks(representation.checks, [...path, "checks"], nextAncestors)
-      if (checks._tag === "Failure") {
-        return checks
-      }
       const enums = projectArray<
         readonly [string, string | number],
         readonly [string, string | number]
@@ -635,18 +548,15 @@ function projectRepresentation(
         const name = data.values[0]
         const value = data.values[1]
         return typeof name === "string" && (typeof value === "string" || typeof value === "number")
-          ? success([name, value] as const)
+          ? [name, value] as const
           : invalidStructuralValue(entryPath, entry)
       })
-      if (enums._tag === "Failure") {
-        return enums
-      }
-      return success({
+      return {
         _tag: "Enum",
-        enums: enums.value,
-        checks: checks.value,
-        ...annotationsField(annotations.value)
-      })
+        enums,
+        checks,
+        ...annotationsField(annotations)
+      }
     }
     case "TemplateLiteral": {
       const annotations = projectNodeAnnotations(
@@ -655,27 +565,18 @@ function projectRepresentation(
         "forbidden",
         nextAncestors
       )
-      if (annotations._tag === "Failure") {
-        return annotations
-      }
       const checks = projectChecks(representation.checks, [...path, "checks"], nextAncestors)
-      if (checks._tag === "Failure") {
-        return checks
-      }
       const parts = projectArray(
         representation.parts,
         [...path, "parts"],
         (part, partPath) => projectRepresentation(part, partPath, nextAncestors)
       )
-      if (parts._tag === "Failure") {
-        return parts
-      }
-      return success({
+      return {
         _tag: "TemplateLiteral",
-        parts: parts.value,
-        checks: checks.value,
-        ...annotationsField(annotations.value)
-      })
+        parts,
+        checks,
+        ...annotationsField(annotations)
+      }
     }
     case "Arrays": {
       const annotations = projectNodeAnnotations(
@@ -684,13 +585,7 @@ function projectRepresentation(
         "forbidden",
         nextAncestors
       )
-      if (annotations._tag === "Failure") {
-        return annotations
-      }
       const checks = projectChecks(representation.checks, [...path, "checks"], nextAncestors)
-      if (checks._tag === "Failure") {
-        return checks
-      }
       const elements = projectArray<
         SchemaRepresentation.Element<SchemaRepresentation.LiveAnnotations>,
         SchemaRepresentation.Element<SchemaRepresentation.PersistedAnnotations>
@@ -702,41 +597,29 @@ function projectRepresentation(
           return invalidStructuralValue([...elementPath, "isOptional"], element.isOptional)
         }
         const type = projectRepresentation(element.type, [...elementPath, "type"], nextAncestors)
-        if (type._tag === "Failure") {
-          return type
-        }
         const elementAnnotations = projectKeyAnnotations(
           element.annotations,
           [...elementPath, "annotations"],
           nextAncestors
         )
-        if (elementAnnotations._tag === "Failure") {
-          return elementAnnotations
-        }
-        return success({
+        return {
           isOptional: element.isOptional,
-          type: type.value,
-          ...annotationsField(elementAnnotations.value)
-        })
+          type,
+          ...annotationsField(elementAnnotations)
+        }
       })
-      if (elements._tag === "Failure") {
-        return elements
-      }
       const rest = projectArray(
         representation.rest,
         [...path, "rest"],
         (rest, restPath) => projectRepresentation(rest, restPath, nextAncestors)
       )
-      if (rest._tag === "Failure") {
-        return rest
-      }
-      return success({
+      return {
         _tag: "Arrays",
-        elements: elements.value,
-        rest: rest.value,
-        checks: checks.value,
-        ...annotationsField(annotations.value)
-      })
+        elements,
+        rest,
+        checks,
+        ...annotationsField(annotations)
+      }
     }
     case "Objects": {
       const annotations = projectNodeAnnotations(
@@ -745,13 +628,7 @@ function projectRepresentation(
         "forbidden",
         nextAncestors
       )
-      if (annotations._tag === "Failure") {
-        return annotations
-      }
       const checks = projectChecks(representation.checks, [...path, "checks"], nextAncestors)
-      if (checks._tag === "Failure") {
-        return checks
-      }
       const propertySignatures = projectArray<
         SchemaRepresentation.PropertySignature<SchemaRepresentation.LiveAnnotations>,
         SchemaRepresentation.PropertySignature<SchemaRepresentation.PersistedAnnotations>
@@ -776,29 +653,20 @@ function projectRepresentation(
             return invalidStructuralValue([...propertyPath, "isMutable"], property.isMutable)
           }
           const type = projectRepresentation(property.type, [...propertyPath, "type"], nextAncestors)
-          if (type._tag === "Failure") {
-            return type
-          }
           const propertyAnnotations = projectKeyAnnotations(
             property.annotations,
             [...propertyPath, "annotations"],
             nextAncestors
           )
-          if (propertyAnnotations._tag === "Failure") {
-            return propertyAnnotations
-          }
-          return success({
+          return {
             name: property.name,
-            type: type.value,
+            type,
             isOptional: property.isOptional,
             isMutable: property.isMutable,
-            ...annotationsField(propertyAnnotations.value)
-          })
+            ...annotationsField(propertyAnnotations)
+          }
         }
       )
-      if (propertySignatures._tag === "Failure") {
-        return propertySignatures
-      }
       const indexSignatures = projectArray<
         SchemaRepresentation.IndexSignature<SchemaRepresentation.LiveAnnotations>,
         SchemaRepresentation.IndexSignature<SchemaRepresentation.PersistedAnnotations>
@@ -810,26 +678,17 @@ function projectRepresentation(
             return invalidStructuralValue(indexPath, index)
           }
           const parameter = projectRepresentation(index.parameter, [...indexPath, "parameter"], nextAncestors)
-          if (parameter._tag === "Failure") {
-            return parameter
-          }
           const type = projectRepresentation(index.type, [...indexPath, "type"], nextAncestors)
-          if (type._tag === "Failure") {
-            return type
-          }
-          return success({ parameter: parameter.value, type: type.value })
+          return { parameter, type }
         }
       )
-      if (indexSignatures._tag === "Failure") {
-        return indexSignatures
-      }
-      return success({
+      return {
         _tag: "Objects",
-        propertySignatures: propertySignatures.value,
-        indexSignatures: indexSignatures.value,
-        checks: checks.value,
-        ...annotationsField(annotations.value)
-      })
+        propertySignatures,
+        indexSignatures,
+        checks,
+        ...annotationsField(annotations)
+      }
     }
     case "Union": {
       const annotations = projectNodeAnnotations(
@@ -838,31 +697,22 @@ function projectRepresentation(
         "forbidden",
         nextAncestors
       )
-      if (annotations._tag === "Failure") {
-        return annotations
-      }
       const checks = projectChecks(representation.checks, [...path, "checks"], nextAncestors)
-      if (checks._tag === "Failure") {
-        return checks
-      }
       const types = projectArray(
         representation.types,
         [...path, "types"],
         (type, typePath) => projectRepresentation(type, typePath, nextAncestors)
       )
-      if (types._tag === "Failure") {
-        return types
-      }
       if (representation.mode !== "anyOf" && representation.mode !== "oneOf") {
         return invalidStructuralValue([...path, "mode"], representation.mode)
       }
-      return success({
+      return {
         _tag: "Union",
-        types: types.value,
+        types,
         mode: representation.mode,
-        checks: checks.value,
-        ...annotationsField(annotations.value)
-      })
+        checks,
+        ...annotationsField(annotations)
+      }
     }
     default:
       return invalidStructuralValue([...path, "_tag"], (representation as { readonly _tag?: unknown })._tag)
@@ -871,8 +721,8 @@ function projectRepresentation(
 
 function projectReferences(
   references: SchemaRepresentation.References<SchemaRepresentation.LiveAnnotations>,
-  path: SchemaRepresentation.Path
-): ProjectionResult<SchemaRepresentation.References<SchemaRepresentation.PersistedAnnotations>> {
+  path: Path
+): SchemaRepresentation.References<SchemaRepresentation.PersistedAnnotations> {
   if (
     typeof references !== "object" ||
     references === null ||
@@ -895,60 +745,45 @@ function projectReferences(
       descriptor.value as SchemaRepresentation.LiveRepresentation,
       [...path, key]
     )
-    if (representation._tag === "Failure") {
-      return representation
-    }
     Object.defineProperty(out, key, {
-      value: representation.value,
+      value: representation,
       enumerable: true,
       configurable: true,
       writable: true
     })
   }
-  return success(out)
+  return out
 }
 
 /** @internal */
 export function projectDocument(
   document: SchemaRepresentation.Document<SchemaRepresentation.LiveAnnotations>
-): ProjectionResult<SchemaRepresentation.Document<SchemaRepresentation.PersistedAnnotations>> {
+): SchemaRepresentation.Document<SchemaRepresentation.PersistedAnnotations> {
   const representation = projectRepresentation(document.representation, ["representation"])
-  if (representation._tag === "Failure") {
-    return representation
-  }
   const references = projectReferences(document.references, ["references"])
-  if (references._tag === "Failure") {
-    return references
-  }
-  return success({ representation: representation.value, references: references.value })
+  return { representation, references }
 }
 
 /** @internal */
 export function projectMultiDocument(
   document: SchemaRepresentation.MultiDocument<SchemaRepresentation.LiveAnnotations>
-): ProjectionResult<SchemaRepresentation.MultiDocument<SchemaRepresentation.PersistedAnnotations>> {
+): SchemaRepresentation.MultiDocument<SchemaRepresentation.PersistedAnnotations> {
   const representations = projectArray(
     document.representations,
     ["representations"],
     (representation, path) => projectRepresentation(representation, path)
   )
-  if (representations._tag === "Failure") {
-    return representations
-  }
-  if (representations.value.length === 0) {
+  if (representations.length === 0) {
     return invalidStructuralValue(["representations"], document.representations)
   }
   const references = projectReferences(document.references, ["references"])
-  if (references._tag === "Failure") {
-    return references
-  }
-  return success({
-    representations: representations.value as readonly [
+  return {
+    representations: representations as readonly [
       SchemaRepresentation.PersistedRepresentation,
       ...Array<SchemaRepresentation.PersistedRepresentation>
     ],
-    references: references.value
-  })
+    references
+  }
 }
 
 export type PersistedRepresentation = SchemaRepresentation.PersistedRepresentation
@@ -956,38 +791,21 @@ export type PersistedCheck = SchemaRepresentation.Check<SchemaRepresentation.Per
 export type PersistedDocument = SchemaRepresentation.Document<SchemaRepresentation.PersistedAnnotations>
 export type PersistedMultiDocument = SchemaRepresentation.MultiDocument<SchemaRepresentation.PersistedAnnotations>
 
-class RevivalFailure {
-  readonly issue: SchemaRepresentation.SchemaRepresentationIssue
-
-  constructor(issue: SchemaRepresentation.SchemaRepresentationIssue) {
-    this.issue = issue
-  }
-}
-
-export function failRevival(issue: SchemaRepresentation.SchemaRepresentationIssue): never {
-  throw new RevivalFailure(issue)
-}
-
-export function protectRevival<A>(path: SchemaRepresentation.Path, evaluate: () => A): A {
-  const result = Result.try(evaluate)
-  if (Result.isSuccess(result)) {
-    return result.success
-  }
-  if (result.failure instanceof RevivalFailure) {
-    throw result.failure
-  }
-  return failRevival({ _tag: "InvalidDocument", path, cause: result.failure })
-}
-
-export function captureRevival<A>(evaluate: () => A): ProjectionResult<A> {
-  const result = Result.try(evaluate)
-  if (Result.isSuccess(result)) {
-    return success(result.success)
-  }
-  return result.failure instanceof RevivalFailure
-    ? failure(result.failure.issue)
-    : failure({ _tag: "InvalidDocument", path: [], cause: result.failure })
-}
+type ImportedJsonSchemaRepresentation = Extract<PersistedRepresentation, {
+  readonly _tag:
+    | "Reference"
+    | "Suspend"
+    | "Never"
+    | "Unknown"
+    | "Null"
+    | "String"
+    | "Number"
+    | "Boolean"
+    | "Literal"
+    | "Arrays"
+    | "Objects"
+    | "Union"
+}>
 
 const jsonSchemaTypes: ReadonlySet<string> = new Set([
   "null",
@@ -1032,8 +850,8 @@ function inferJsonSchemaType(schema: JsonSchema.JsonSchema): JsonSchema.Type | u
 }
 
 function jsonSchemaReferenceKey($ref: string): string | undefined {
-  const token = $ref.split("/").at(-1)
-  return token === undefined || token.length === 0 ? undefined : unescapeToken(token)
+  const token = $ref.split("/").at(-1)!
+  return token.length === 0 ? undefined : unescapeToken(token)
 }
 
 function jsonSchemaFilter(
@@ -1070,9 +888,9 @@ function jsonSchemaAnnotations(
 }
 
 function annotateJsonSchemaRepresentation(
-  representation: PersistedRepresentation,
+  representation: ImportedJsonSchemaRepresentation,
   annotations: SchemaRepresentation.PersistedAnnotations["node"] | undefined
-): PersistedRepresentation {
+): ImportedJsonSchemaRepresentation {
   if (annotations === undefined) {
     return representation
   }
@@ -1174,16 +992,16 @@ function translateJsonSchemaMultiDocument(
   options?: SchemaRepresentation.FromJsonSchemaOptions,
   singleRoot = false
 ): PersistedMultiDocument {
-  const definitionCache = new Map<string, PersistedRepresentation>()
+  const definitionCache = new Map<string, ImportedJsonSchemaRepresentation>()
   const definitionsInProgress = new Set<string>()
 
-  function translateDefinition(key: string, path: SchemaRepresentation.Path): PersistedRepresentation {
+  function translateDefinition(key: string, path: Path): ImportedJsonSchemaRepresentation {
     const cached = definitionCache.get(key)
     if (cached !== undefined) {
       return cached
     }
     if (!hasOwn.call(document.definitions, key) || definitionsInProgress.has(key)) {
-      return failRevival({ _tag: "InvalidReference", path: [...path, "$ref"], $ref: key })
+      throw errorWithPath(`Invalid reference ${key}`, [...path, "$ref"])
     }
     definitionsInProgress.add(key)
     const representation = recur(document.definitions[key], ["definitions", key])
@@ -1194,11 +1012,11 @@ function translateJsonSchemaMultiDocument(
 
   function resolveReference(
     reference: SchemaRepresentation.Reference,
-    path: SchemaRepresentation.Path,
+    path: Path,
     seen: ReadonlySet<string> = new Set()
-  ): PersistedRepresentation {
+  ): ImportedJsonSchemaRepresentation {
     if (seen.has(reference.$ref)) {
-      return failRevival({ _tag: "InvalidReference", path: [...path, "$ref"], $ref: reference.$ref })
+      throw errorWithPath(`Invalid reference ${reference.$ref}`, [...path, "$ref"])
     }
     const nextSeen = new Set(seen)
     nextSeen.add(reference.$ref)
@@ -1216,7 +1034,7 @@ function translateJsonSchemaMultiDocument(
   }
 
   function annotationsOf(
-    representation: PersistedRepresentation
+    representation: ImportedJsonSchemaRepresentation
   ): SchemaRepresentation.PersistedAnnotations["node"] | undefined {
     return representation._tag === "Reference" ? undefined : representation.annotations
   }
@@ -1231,27 +1049,142 @@ function translateJsonSchemaMultiDocument(
   }
 
   function combinedAnnotations(
-    representation: PersistedRepresentation,
-    left: PersistedRepresentation,
-    right: PersistedRepresentation
-  ): PersistedRepresentation {
+    representation: ImportedJsonSchemaRepresentation,
+    left: ImportedJsonSchemaRepresentation,
+    right: ImportedJsonSchemaRepresentation
+  ): ImportedJsonSchemaRepresentation {
     return annotateJsonSchemaRepresentation(
       representation,
       mergeAnnotations(annotationsOf(left), annotationsOf(right))
     )
   }
 
+  function hasOrdinaryCheckAnnotations(
+    annotations: SchemaRepresentation.PersistedAnnotations["filter"] | undefined
+  ): boolean {
+    return annotations !== undefined && Object.keys(annotations).some((key) => key !== "representation")
+  }
+
+  function asChecks(
+    checks: ReadonlyArray<PersistedCheck>,
+    annotations: SchemaRepresentation.PersistedAnnotations["node"] | undefined
+  ): ReadonlyArray<PersistedCheck> | undefined {
+    if (checks.length === 0) return undefined
+    if (annotations === undefined) return checks
+    if (checks.length === 1 && !hasOrdinaryCheckAnnotations(checks[0].annotations)) {
+      return [{
+        ...checks[0],
+        annotations: {
+          ...checks[0].annotations,
+          ...annotations
+        }
+      }]
+    }
+    return [{
+      _tag: "FilterGroup",
+      checks: checks as [PersistedCheck, ...Array<PersistedCheck>],
+      annotations
+    }]
+  }
+
   function combineChecks(
     left: ReadonlyArray<PersistedCheck>,
-    right: ReadonlyArray<PersistedCheck>
-  ): ReadonlyArray<PersistedCheck> {
-    return left.length === 0 ? right : right.length === 0 ? left : [...left, ...right]
+    right: ReadonlyArray<PersistedCheck>,
+    annotations: SchemaRepresentation.PersistedAnnotations["node"] | undefined
+  ): ReadonlyArray<PersistedCheck> | undefined {
+    const checks = asChecks(right, annotations)
+    return checks === undefined ? undefined : [...left, ...checks]
+  }
+
+  function checkId(check: PersistedCheck): string | undefined {
+    return check._tag === "Filter" ? check.annotations?.representation?.id : undefined
+  }
+
+  function isJsonObject(input: Schema.Json | undefined): input is Schema.JsonObject {
+    return typeof input === "object" && input !== null && !Array.isArray(input)
+  }
+
+  function combineNumberChecks(
+    left: ReadonlyArray<PersistedCheck>,
+    right: ReadonlyArray<PersistedCheck>,
+    annotations: SchemaRepresentation.PersistedAnnotations["node"] | undefined
+  ): ReadonlyArray<PersistedCheck> | undefined {
+    if (left.some((check) => checkId(check) === "effect/schema/isFinite")) {
+      right = right.filter((check) => checkId(check) !== "effect/schema/isFinite")
+    }
+    if (left.some((check) => checkId(check) === "effect/schema/isInt")) {
+      right = right.filter((check) => checkId(check) !== "effect/schema/isInt")
+    }
+    return combineChecks(left, right, annotations)
+  }
+
+  function combineArrayChecks(
+    left: ReadonlyArray<PersistedCheck>,
+    right: ReadonlyArray<PersistedCheck>,
+    annotations: SchemaRepresentation.PersistedAnnotations["node"] | undefined
+  ): ReadonlyArray<PersistedCheck> | undefined {
+    if (left.some((check) => checkId(check) === "effect/schema/isUnique")) {
+      right = right.filter((check) => checkId(check) !== "effect/schema/isUnique")
+    }
+    return combineChecks(left, right, annotations)
+  }
+
+  function satisfiesPrimitiveCheck(check: PersistedCheck, value: unknown): boolean | undefined {
+    if (check._tag === "FilterGroup") {
+      return check.checks.every((check) => satisfiesPrimitiveCheck(check, value))
+    }
+    const representation = check.annotations?.representation
+    const payload = representation?.payload
+    const payloadObject = isJsonObject(payload) ? payload : undefined
+    switch (representation?.id) {
+      case "effect/schema/isMinLength":
+        return typeof value === "string" && typeof payloadObject?.minLength === "number" &&
+          value.length >= payloadObject.minLength
+      case "effect/schema/isMaxLength":
+        return typeof value === "string" && typeof payloadObject?.maxLength === "number" &&
+          value.length <= payloadObject.maxLength
+      case "effect/schema/isPattern":
+        return typeof value === "string" && typeof payloadObject?.source === "string" &&
+          typeof payloadObject.flags === "string" && new RegExp(payloadObject.source, payloadObject.flags).test(value)
+      case "effect/schema/isFinite":
+        return typeof value === "number" && globalThis.Number.isFinite(value)
+      case "effect/schema/isInt":
+        return typeof value === "number" && globalThis.Number.isSafeInteger(value)
+      case "effect/schema/isMultipleOf":
+        return typeof value === "number" && typeof payloadObject?.divisor === "number" &&
+          remainder(value, payloadObject.divisor) === 0
+      case "effect/schema/isGreaterThan":
+        return typeof value === "number" && typeof payloadObject?.exclusiveMinimum === "number" &&
+          value > payloadObject.exclusiveMinimum
+      case "effect/schema/isGreaterThanOrEqualTo":
+        return typeof value === "number" && typeof payloadObject?.minimum === "number" &&
+          value >= payloadObject.minimum
+      case "effect/schema/isLessThan":
+        return typeof value === "number" && typeof payloadObject?.exclusiveMaximum === "number" &&
+          value < payloadObject.exclusiveMaximum
+      case "effect/schema/isLessThanOrEqualTo":
+        return typeof value === "number" && typeof payloadObject?.maximum === "number" &&
+          value <= payloadObject.maximum
+    }
+  }
+
+  function satisfiesLiteral(
+    representation:
+      | SchemaRepresentation.String<SchemaRepresentation.PersistedAnnotations>
+      | SchemaRepresentation.Number<SchemaRepresentation.PersistedAnnotations>,
+    literal: SchemaRepresentation.Literal<SchemaRepresentation.PersistedAnnotations>
+  ): boolean {
+    const value = literal.literal
+    if (representation._tag === "String" ? typeof value !== "string" : typeof value !== "number") {
+      return false
+    }
+    return representation.checks.every((check) => satisfiesPrimitiveCheck(check, value))
   }
 
   function combineArrays(
     left: SchemaRepresentation.Arrays<SchemaRepresentation.PersistedAnnotations>,
     right: SchemaRepresentation.Arrays<SchemaRepresentation.PersistedAnnotations>,
-    path: SchemaRepresentation.Path
+    path: Path
   ): Pick<SchemaRepresentation.Arrays<SchemaRepresentation.PersistedAnnotations>, "elements" | "rest"> | undefined {
     const elements: Array<SchemaRepresentation.Element<SchemaRepresentation.PersistedAnnotations>> = []
     const length = Math.max(left.elements.length, right.elements.length)
@@ -1264,16 +1197,17 @@ function translateJsonSchemaMultiDocument(
       if (leftType === undefined || rightType === undefined) {
         return isOptional ? { elements, rest: [] } : undefined
       }
-      const type = combine(leftType, rightType, [...path, "elements", index, "type"])
+      const type = combine(
+        leftType as ImportedJsonSchemaRepresentation,
+        rightType as ImportedJsonSchemaRepresentation,
+        [...path, "elements", index, "type"]
+      )
       if (type._tag === "Never") {
         return isOptional ? { elements, rest: [] } : undefined
       }
       elements.push({
         isOptional,
-        type,
-        ...(leftElement?.annotations === undefined && rightElement?.annotations === undefined
-          ? undefined
-          : { annotations: { ...leftElement?.annotations, ...rightElement?.annotations } })
+        type
       })
     }
 
@@ -1282,14 +1216,18 @@ function translateJsonSchemaMultiDocument(
     if (leftRest === undefined || rightRest === undefined) {
       return { elements, rest: [] }
     }
-    const rest = combine(leftRest, rightRest, [...path, "rest", 0])
+    const rest = combine(
+      leftRest as ImportedJsonSchemaRepresentation,
+      rightRest as ImportedJsonSchemaRepresentation,
+      [...path, "rest", 0]
+    )
     return { elements, rest: rest._tag === "Never" ? [] : [rest] }
   }
 
   function combineProperties(
     left: ReadonlyArray<SchemaRepresentation.PropertySignature<SchemaRepresentation.PersistedAnnotations>>,
     right: ReadonlyArray<SchemaRepresentation.PropertySignature<SchemaRepresentation.PersistedAnnotations>>,
-    path: SchemaRepresentation.Path
+    path: Path
   ): Array<SchemaRepresentation.PropertySignature<SchemaRepresentation.PersistedAnnotations>> {
     const rightByName = new Map(right.map((property) => [property.name, property]))
     const names = new Set<PropertyKey | number>()
@@ -1299,16 +1237,13 @@ function translateJsonSchemaMultiDocument(
       if (other === undefined) return property
       return {
         name: property.name,
-        type: combine(property.type, other.type, [
-          ...path,
-          "properties",
-          typeof property.name === "symbol" ? globalThis.String(property.name) : property.name
-        ]),
+        type: combine(
+          property.type as ImportedJsonSchemaRepresentation,
+          other.type as ImportedJsonSchemaRepresentation,
+          [...path, "properties", property.name as string]
+        ),
         isOptional: property.isOptional && other.isOptional,
-        isMutable: property.isMutable || other.isMutable,
-        ...(property.annotations === undefined && other.annotations === undefined
-          ? undefined
-          : { annotations: { ...property.annotations, ...other.annotations } })
+        isMutable: false
       }
     })
     for (const property of right) {
@@ -1326,7 +1261,7 @@ function translateJsonSchemaMultiDocument(
   function combineIndexSignatures(
     left: ReadonlyArray<SchemaRepresentation.IndexSignature<SchemaRepresentation.PersistedAnnotations>>,
     right: ReadonlyArray<SchemaRepresentation.IndexSignature<SchemaRepresentation.PersistedAnnotations>>,
-    path: SchemaRepresentation.Path
+    path: Path
   ): Array<SchemaRepresentation.IndexSignature<SchemaRepresentation.PersistedAnnotations>> {
     if (left.length === 0 || right.length === 0) return []
     const signatures = [...left]
@@ -1336,7 +1271,11 @@ function translateJsonSchemaMultiDocument(
         if (index !== -1) {
           signatures[index] = {
             parameter: signatures[index].parameter,
-            type: combine(signatures[index].type, signature.type, [...path, "indexSignatures", index, "type"])
+            type: combine(
+              signatures[index].type as ImportedJsonSchemaRepresentation,
+              signature.type as ImportedJsonSchemaRepresentation,
+              [...path, "indexSignatures", index, "type"]
+            )
           }
         } else {
           signatures.push(signature)
@@ -1349,53 +1288,55 @@ function translateJsonSchemaMultiDocument(
   }
 
   function combine(
-    left: PersistedRepresentation,
-    right: PersistedRepresentation,
-    path: SchemaRepresentation.Path
-  ): PersistedRepresentation {
+    left: ImportedJsonSchemaRepresentation,
+    right: ImportedJsonSchemaRepresentation,
+    path: Path
+  ): ImportedJsonSchemaRepresentation {
     if (left._tag === "Never") return left
     if (right._tag === "Never") return right
-    if (left._tag === "Unknown") return annotateJsonSchemaRepresentation(right, left.annotations)
-    if (right._tag === "Unknown") return annotateJsonSchemaRepresentation(left, right.annotations)
+    if (left._tag === "Unknown") return combinedAnnotations(right, left, right)
+    if (right._tag === "Unknown") return combinedAnnotations(left, left, right)
     if (left._tag === "Reference") return combine(resolveReference(left, path), right, path)
     if (right._tag === "Reference") return combine(left, resolveReference(right, path), path)
     if (left._tag === "Suspend") {
-      return annotateJsonSchemaRepresentation(combine(left.thunk, right, path), left.annotations)
+      return annotateJsonSchemaRepresentation(
+        combine(left.thunk as ImportedJsonSchemaRepresentation, right, path),
+        left.annotations
+      )
     }
     if (right._tag === "Suspend") {
-      return annotateJsonSchemaRepresentation(combine(left, right.thunk, path), right.annotations)
+      return annotateJsonSchemaRepresentation(
+        combine(left, right.thunk as ImportedJsonSchemaRepresentation, path),
+        right.annotations
+      )
     }
     if (left._tag === "Union") {
       const types = left.types
-        .map((type, index) => combine(type, right, [...path, "types", index]))
+        .map((type, index) => combine(type as ImportedJsonSchemaRepresentation, right, [...path, "types", index]))
         .filter((type) => type._tag !== "Never")
       if (types.length === 0) return { _tag: "Never", checks: [] }
-      return combinedAnnotations(
-        {
-          _tag: "Union",
-          types,
-          mode: left.mode,
-          checks: left.checks
-        },
-        left,
-        right
-      )
+      return annotateJsonSchemaRepresentation({
+        _tag: "Union",
+        types,
+        mode: left.mode,
+        checks: left.checks
+      }, left.annotations)
     }
     if (right._tag === "Union") return combine(right, left, path)
 
     switch (left._tag) {
       case "Null":
         return right._tag === "Null"
-          ? combinedAnnotations({ _tag: "Null", checks: combineChecks(left.checks, right.checks) }, left, right)
+          ? combinedAnnotations({ _tag: "Null", checks: [...left.checks, ...right.checks] }, left, right)
           : { _tag: "Never", checks: [] }
       case "String":
         if (right._tag === "Literal") {
-          return typeof right.literal === "string"
+          return satisfiesLiteral(left, right)
             ? combinedAnnotations(
               {
                 _tag: "Literal",
                 literal: right.literal,
-                checks: combineChecks(left.checks, right.checks)
+                checks: right.checks
               },
               left,
               right
@@ -1403,10 +1344,11 @@ function translateJsonSchemaMultiDocument(
             : { _tag: "Never", checks: [] }
         }
         if (right._tag !== "String") return { _tag: "Never", checks: [] }
-        return combinedAnnotations(
+        const stringChecks = combineChecks(left.checks, right.checks, right.annotations)
+        return annotateJsonSchemaRepresentation(
           {
             _tag: "String",
-            checks: combineChecks(left.checks, right.checks),
+            checks: stringChecks ?? left.checks,
             ...(right.contentMediaType ?? left.contentMediaType) === undefined
               ? undefined
               : { contentMediaType: right.contentMediaType ?? left.contentMediaType },
@@ -1414,33 +1356,31 @@ function translateJsonSchemaMultiDocument(
               ? undefined
               : { contentSchema: right.contentSchema ?? left.contentSchema }
           },
-          left,
-          right
+          mergeAnnotations(left.annotations, stringChecks === undefined ? right.annotations : undefined)
         )
       case "Number":
         if (right._tag === "Literal") {
-          return typeof right.literal === "number"
+          return satisfiesLiteral(left, right)
             ? combinedAnnotations(
               {
                 _tag: "Literal",
                 literal: right.literal,
-                checks: combineChecks(left.checks, right.checks)
+                checks: right.checks
               },
               left,
               right
             )
             : { _tag: "Never", checks: [] }
         }
-        return right._tag === "Number"
-          ? combinedAnnotations(
-            {
-              _tag: "Number",
-              checks: combineChecks(left.checks, right.checks)
-            },
-            left,
-            right
-          )
-          : { _tag: "Never", checks: [] }
+        if (right._tag !== "Number") return { _tag: "Never", checks: [] }
+        const numberChecks = combineNumberChecks(left.checks, right.checks, right.annotations)
+        return annotateJsonSchemaRepresentation(
+          {
+            _tag: "Number",
+            checks: numberChecks ?? left.checks
+          },
+          mergeAnnotations(left.annotations, numberChecks === undefined ? right.annotations : undefined)
+        )
       case "Boolean":
         if (right._tag === "Literal") {
           return typeof right.literal === "boolean"
@@ -1448,7 +1388,7 @@ function translateJsonSchemaMultiDocument(
               {
                 _tag: "Literal",
                 literal: right.literal,
-                checks: combineChecks(left.checks, right.checks)
+                checks: right.checks
               },
               left,
               right
@@ -1459,7 +1399,7 @@ function translateJsonSchemaMultiDocument(
           ? combinedAnnotations(
             {
               _tag: "Boolean",
-              checks: combineChecks(left.checks, right.checks)
+              checks: [...left.checks, ...right.checks]
             },
             left,
             right
@@ -1472,7 +1412,7 @@ function translateJsonSchemaMultiDocument(
               {
                 _tag: "Literal",
                 literal: left.literal,
-                checks: combineChecks(left.checks, right.checks)
+                checks: [...left.checks, ...right.checks]
               },
               left,
               right
@@ -1480,15 +1420,14 @@ function translateJsonSchemaMultiDocument(
             : { _tag: "Never", checks: [] }
         }
         if (
-          (right._tag === "String" && typeof left.literal === "string") ||
-          (right._tag === "Number" && typeof left.literal === "number") ||
-          (right._tag === "Boolean" && typeof left.literal === "boolean")
+          (right._tag === "String" || right._tag === "Number") && satisfiesLiteral(right, left) ||
+          right._tag === "Boolean" && typeof left.literal === "boolean"
         ) {
           return combinedAnnotations(
             {
               _tag: "Literal",
               literal: left.literal,
-              checks: combineChecks(left.checks, right.checks)
+              checks: left.checks
             },
             left,
             right
@@ -1499,72 +1438,62 @@ function translateJsonSchemaMultiDocument(
         if (right._tag !== "Arrays") return { _tag: "Never", checks: [] }
         const arrays = combineArrays(left, right, path)
         if (arrays === undefined) return { _tag: "Never", checks: [] }
-        return combinedAnnotations(
+        const arrayChecks = combineArrayChecks(left.checks, right.checks, right.annotations)
+        return annotateJsonSchemaRepresentation(
           {
             _tag: "Arrays",
             elements: arrays.elements,
             rest: arrays.rest,
-            checks: combineChecks(left.checks, right.checks)
+            checks: arrayChecks ?? left.checks
           },
-          left,
-          right
+          mergeAnnotations(left.annotations, arrayChecks === undefined ? right.annotations : undefined)
         )
       }
-      case "Objects":
-        return right._tag === "Objects"
-          ? combinedAnnotations(
-            {
-              _tag: "Objects",
-              propertySignatures: combineProperties(left.propertySignatures, right.propertySignatures, path),
-              indexSignatures: combineIndexSignatures(left.indexSignatures, right.indexSignatures, path),
-              checks: combineChecks(left.checks, right.checks)
-            },
-            left,
-            right
-          )
-          : { _tag: "Never", checks: [] }
-      default:
-        return { _tag: "Never", checks: [] }
+      case "Objects": {
+        if (right._tag !== "Objects") return { _tag: "Never", checks: [] }
+        const objectChecks = combineChecks(left.checks, right.checks, right.annotations)
+        return annotateJsonSchemaRepresentation(
+          {
+            _tag: "Objects",
+            propertySignatures: combineProperties(left.propertySignatures, right.propertySignatures, path),
+            indexSignatures: combineIndexSignatures(left.indexSignatures, right.indexSignatures, path),
+            checks: objectChecks ?? left.checks
+          },
+          mergeAnnotations(left.annotations, objectChecks === undefined ? right.annotations : undefined)
+        )
+      }
     }
   }
 
-  function enter(input: unknown, path: SchemaRepresentation.Path): JsonSchema.JsonSchema | undefined {
+  function enter(input: unknown, path: Path): JsonSchema.JsonSchema | undefined {
     if (typeof input !== "object" || input === null || Array.isArray(input)) {
       return undefined
     }
     const copied = copyStrictJson(input)
-    if (
-      copied._tag === "Failure" || typeof copied.value !== "object" || copied.value === null ||
-      Array.isArray(copied.value)
-    ) {
-      return failRevival({
-        _tag: "InvalidDocument",
-        path: copied._tag === "Failure" ? [...path, ...copied.path] : path,
-        cause: copied._tag === "Failure" ? copied.actual : input
-      })
+    if (copied._tag === "Failure") {
+      throw errorWithPath(
+        "Invalid schema representation document",
+        [...path, ...copied.path]
+      )
     }
     if (options?.onEnter === undefined) {
       return copied.value as JsonSchema.JsonSchema
     }
-    const entered = Result.try(() => options.onEnter!(copied.value as JsonSchema.JsonSchema))
-    if (Result.isFailure(entered)) {
-      return failRevival({ _tag: "InvalidDocument", path, cause: entered.failure })
-    }
-    const output = copyStrictJson(entered.success)
+    const entered = options.onEnter(copied.value as JsonSchema.JsonSchema)
+    const output = copyStrictJson(entered)
     if (
       output._tag === "Failure" || typeof output.value !== "object" || output.value === null ||
       Array.isArray(output.value)
     ) {
-      return failRevival({
-        _tag: "InvalidDocument",
-        path: output._tag === "Failure" ? [...path, ...output.path] : path,
-        cause: output._tag === "Failure" ? output.actual : entered.success
-      })
+      throw errorWithPath(
+        "Invalid schema representation document",
+        output._tag === "Failure" ? [...path, ...output.path] : path
+      )
     }
     return output.value as JsonSchema.JsonSchema
   }
 
-  function recur(input: unknown, path: SchemaRepresentation.Path): PersistedRepresentation {
+  function recur(input: unknown, path: Path): ImportedJsonSchemaRepresentation {
     if (input === false) {
       return { _tag: "Never", checks: [] }
     }
@@ -1574,6 +1503,11 @@ function translateJsonSchemaMultiDocument(
     }
 
     let representation = on(schema, path)
+    const annotations = jsonSchemaAnnotations(schema)
+    if (annotations !== undefined && representation._tag === "Reference") {
+      resolveReference(representation, path)
+    }
+    representation = annotateJsonSchemaRepresentation(representation, annotations)
 
     if (Array.isArray(schema.allOf)) {
       for (let index = 0; index < schema.allOf.length; index++) {
@@ -1586,7 +1520,7 @@ function translateJsonSchemaMultiDocument(
     }
 
     if (Array.isArray(schema.anyOf)) {
-      const union: PersistedRepresentation = {
+      const union: ImportedJsonSchemaRepresentation = {
         _tag: "Union",
         types: schema.anyOf.map((member, index) => recur(member, [...path, "anyOf", index])),
         mode: "anyOf",
@@ -1595,7 +1529,7 @@ function translateJsonSchemaMultiDocument(
       representation = combine(union, representation, [...path, "anyOf"])
     }
     if (Array.isArray(schema.oneOf)) {
-      const union: PersistedRepresentation = {
+      const union: ImportedJsonSchemaRepresentation = {
         _tag: "Union",
         types: schema.oneOf.map((member, index) => recur(member, [...path, "oneOf", index])),
         mode: "oneOf",
@@ -1603,10 +1537,10 @@ function translateJsonSchemaMultiDocument(
       }
       representation = combine(union, representation, [...path, "oneOf"])
     }
-    return annotateJsonSchemaRepresentation(representation, jsonSchemaAnnotations(schema))
+    return representation
   }
 
-  function on(schema: JsonSchema.JsonSchema, path: SchemaRepresentation.Path): PersistedRepresentation {
+  function on(schema: JsonSchema.JsonSchema, path: Path): ImportedJsonSchemaRepresentation {
     if (typeof schema.$ref === "string") {
       const $ref = jsonSchemaReferenceKey(schema.$ref)
       if ($ref !== undefined) {
@@ -1622,7 +1556,7 @@ function translateJsonSchemaMultiDocument(
       }
     }
     if (Array.isArray(schema.enum)) {
-      const types: Array<PersistedRepresentation> = []
+      const types: Array<ImportedJsonSchemaRepresentation> = []
       for (let index = 0; index < schema.enum.length; index++) {
         const value = schema.enum[index]
         if (value === null) {
@@ -1685,7 +1619,7 @@ function translateJsonSchemaMultiDocument(
           ? [recur(schema.items, [...path, "items"])]
           : schema.prefixItems !== undefined && typeof schema.maxItems === "number"
           ? []
-          : [{ _tag: "Unknown", checks: [] } as PersistedRepresentation]
+          : [{ _tag: "Unknown", checks: [] } as ImportedJsonSchemaRepresentation]
         return {
           _tag: "Arrays",
           elements,
@@ -1757,7 +1691,7 @@ function translateJsonSchemaMultiDocument(
 
   function collectProperties(
     schema: JsonSchema.JsonSchema,
-    path: SchemaRepresentation.Path
+    path: Path
   ): Array<SchemaRepresentation.PropertySignature<SchemaRepresentation.PersistedAnnotations>> {
     const properties =
       typeof schema.properties === "object" && schema.properties !== null && !Array.isArray(schema.properties)
@@ -1777,7 +1711,7 @@ function translateJsonSchemaMultiDocument(
 
   function collectIndexSignatures(
     schema: JsonSchema.JsonSchema,
-    path: SchemaRepresentation.Path
+    path: Path
   ): Array<SchemaRepresentation.IndexSignature<SchemaRepresentation.PersistedAnnotations>> {
     const signatures: Array<SchemaRepresentation.IndexSignature<SchemaRepresentation.PersistedAnnotations>> = []
     if (
@@ -1811,7 +1745,7 @@ function translateJsonSchemaMultiDocument(
 
   function collectObjectChecks(
     schema: JsonSchema.JsonSchema,
-    path: SchemaRepresentation.Path
+    path: Path
   ): Array<PersistedCheck> {
     const checks: Array<PersistedCheck> = []
     if (typeof schema.minProperties === "number") {
@@ -1840,7 +1774,7 @@ function translateJsonSchemaMultiDocument(
     })
   }
   if (document.schemas.length === 0) {
-    return failRevival({ _tag: "InvalidDocument", path: ["schemas"] })
+    throw errorWithPath("Invalid schema representation document", ["schemas"])
   }
   const representations = document.schemas.map((schema, index) =>
     unknownJsonSchemas(recur(schema, singleRoot ? ["schema"] : ["schemas", index]))
@@ -1852,55 +1786,31 @@ function translateJsonSchemaMultiDocument(
 export function fromJsonSchemaDocument(
   document: JsonSchema.Document<"draft-2020-12">,
   options?: SchemaRepresentation.FromJsonSchemaOptions
-): ProjectionResult<PersistedDocument> {
-  return captureRevival(() => {
-    const translated = translateJsonSchemaMultiDocument(
-      {
-        dialect: document.dialect,
-        schemas: [document.schema],
-        definitions: document.definitions
-      },
-      options,
-      true
-    )
-    return {
-      representation: translated.representations[0],
-      references: translated.references
-    }
-  })
+): PersistedDocument {
+  const translated = translateJsonSchemaMultiDocument(
+    {
+      dialect: document.dialect,
+      schemas: [document.schema],
+      definitions: document.definitions
+    },
+    options,
+    true
+  )
+  return {
+    representation: translated.representations[0],
+    references: translated.references
+  }
 }
 
 /** @internal */
 export function fromJsonSchemaMultiDocument(
   document: JsonSchema.MultiDocument<"draft-2020-12">,
   options?: SchemaRepresentation.FromJsonSchemaOptions
-): ProjectionResult<PersistedMultiDocument> {
-  return captureRevival(() => translateJsonSchemaMultiDocument(document, options))
+): PersistedMultiDocument {
+  return translateJsonSchemaMultiDocument(document, options)
 }
 
-class CompilerFailure {
-  readonly issue: SchemaRepresentation.SchemaRepresentationIssue
-
-  constructor(issue: SchemaRepresentation.SchemaRepresentationIssue) {
-    this.issue = issue
-  }
-}
-
-function failCompiler(issue: SchemaRepresentation.SchemaRepresentationIssue): never {
-  throw new CompilerFailure(issue)
-}
-
-function captureCompiler<A>(evaluate: () => A): ProjectionResult<A> {
-  const result = Result.try(evaluate)
-  if (Result.isSuccess(result)) {
-    return success(result.success)
-  }
-  return result.failure instanceof CompilerFailure
-    ? failure(result.failure.issue)
-    : failure({ _tag: "InvalidDocument", path: [], cause: result.failure })
-}
-
-const jsonSchemaAnnotationKeys: ReadonlySet<string> = new Set([
+const jsonSchemaExcludedAnnotationKeys: ReadonlySet<string> = new Set([
   "title",
   "description",
   "default",
@@ -1910,10 +1820,7 @@ const jsonSchemaAnnotationKeys: ReadonlySet<string> = new Set([
   "format",
   "contentEncoding",
   "contentMediaType",
-  "contentSchema"
-])
-
-const compilerCapabilityKeys: ReadonlySet<string> = new Set([
+  "contentSchema",
   "representation",
   "toJsonSchema",
   "generation",
@@ -1985,8 +1892,7 @@ function collectJsonSchemaAnnotations(
       if (
         typeof key !== "string" ||
         key.startsWith("~") ||
-        jsonSchemaAnnotationKeys.has(key) ||
-        compilerCapabilityKeys.has(key) ||
+        jsonSchemaExcludedAnnotationKeys.has(key) ||
         !options.includeAnnotationKey(key)
       ) {
         continue
@@ -2005,6 +1911,40 @@ function collectJsonSchemaAnnotations(
   return Object.keys(out).length === 0 ? undefined : out
 }
 
+type JsonSchemaNumberType = "number" | "integer"
+
+function extractJsonSchemaNumberType(schema: JsonSchema.JsonSchema): {
+  readonly type: JsonSchemaNumberType | undefined
+  readonly schema: JsonSchema.JsonSchema
+} {
+  let type: JsonSchemaNumberType | undefined = schema.type === "number" || schema.type === "integer"
+    ? schema.type
+    : undefined
+  let out = type === undefined ? schema : Object.fromEntries(Object.entries(schema).filter(([key]) => key !== "type"))
+  if (Array.isArray(out.allOf)) {
+    const members: Array<JsonSchema.JsonSchema> = []
+    let changed = false
+    for (const member of out.allOf) {
+      const extracted = extractJsonSchemaNumberType(member)
+      if (extracted.type !== undefined) {
+        changed = true
+        if (type === undefined || extracted.type === "integer") type = extracted.type
+      }
+      if (Object.keys(extracted.schema).length > 0) members.push(extracted.schema)
+    }
+    if (changed) {
+      const { allOf: _, ...rest } = out
+      out = members.length === 0 ? rest : { ...rest, allOf: members }
+    }
+  }
+  return { type, schema: out }
+}
+
+function isJsonSchemaNumberEncoding(schema: JsonSchema.JsonSchema): boolean {
+  return Array.isArray(schema.anyOf) && schema.anyOf.length === 4 && schema.anyOf[0]?.type === "number" &&
+    schema.anyOf.slice(1).every((member) => member.type === "string")
+}
+
 function appendJsonSchema(
   left: JsonSchema.JsonSchema,
   right: JsonSchema.JsonSchema
@@ -2012,6 +1952,17 @@ function appendJsonSchema(
   if (Object.keys(left).length === 0) return right
   const rightKeys = Object.keys(right)
   if (rightKeys.length === 0) return left
+  const leftType = left.type === "number" || left.type === "integer" ? left.type : undefined
+  if (leftType !== undefined || isJsonSchemaNumberEncoding(left)) {
+    const extracted = extractJsonSchemaNumberType(right)
+    if (extracted.type !== undefined) {
+      const type = leftType === "integer" || extracted.type === "integer" ? "integer" : "number"
+      const base = isJsonSchemaNumberEncoding(left)
+        ? { ...Object.fromEntries(Object.entries(left).filter(([key]) => key !== "anyOf")), type }
+        : { ...left, type }
+      return Object.keys(extracted.schema).length === 0 ? base : appendJsonSchema(base, extracted.schema)
+    }
+  }
   const members = Array.isArray(right.allOf) && rightKeys.length === 1 ? right.allOf : [right]
   if (Array.isArray(left.allOf)) {
     return { ...left, allOf: [...left.allOf, ...members] }
@@ -2024,32 +1975,16 @@ function appendJsonSchema(
 
 function validateJsonSchemaResult(
   input: unknown,
-  path: SchemaRepresentation.Path
+  path: Path
 ): JsonSchema.JsonSchema {
-  if (
-    typeof input !== "object" ||
-    input === null ||
-    Array.isArray(input) ||
-    (Object.getPrototypeOf(input) !== Object.prototype && Object.getPrototypeOf(input) !== null)
-  ) {
-    return failCompiler({ _tag: "InvalidJsonSchemaResult", path, actual: input })
-  }
   const copied = copyStrictJson(input)
-  if (copied._tag === "Failure" || Array.isArray(copied.value) || copied.value === null) {
-    return failCompiler({ _tag: "InvalidJsonSchemaResult", path, actual: input })
+  if (
+    copied._tag === "Failure" || typeof copied.value !== "object" || copied.value === null ||
+    Array.isArray(copied.value)
+  ) {
+    throw errorWithPath("Invalid JSON Schema callback result", path)
   }
   return copied.value as JsonSchema.JsonSchema
-}
-
-function invokeJsonSchemaCallback(
-  callback: () => unknown,
-  path: SchemaRepresentation.Path
-): JsonSchema.JsonSchema {
-  const result = Result.try(callback)
-  if (Result.isFailure(result)) {
-    return failCompiler({ _tag: "InvalidJsonSchemaResult", path, cause: result.failure })
-  }
-  return validateJsonSchemaResult(result.success, path)
 }
 
 function compileJsonSchema(
@@ -2057,7 +1992,7 @@ function compileJsonSchema(
     SchemaRepresentation.LiveRepresentation,
     ...Array<SchemaRepresentation.LiveRepresentation>
   ],
-  rootPaths: ReadonlyArray<SchemaRepresentation.Path>,
+  rootPaths: ReadonlyArray<Path>,
   references: SchemaRepresentation.References<SchemaRepresentation.LiveAnnotations>,
   options: Schema.ToJsonSchemaOptions | undefined
 ): JsonSchema.MultiDocument<"draft-2020-12"> {
@@ -2070,25 +2005,21 @@ function compileJsonSchema(
 
   function annotationSchemas(
     annotations: Schema.Annotations.Annotations | undefined,
-    path: SchemaRepresentation.Path
+    path: Path
   ): ReadonlyArray<JsonSchema.JsonSchema> {
     const representation = getDataAnnotation(annotations, "representation")
     if (representation === undefined) {
       return []
     }
     if (typeof representation !== "object" || representation === null || Array.isArray(representation)) {
-      return failCompiler({ _tag: "InvalidDocument", path: [...path, "representation"], cause: representation })
+      throw errorWithPath("Invalid schema representation document", [...path, "representation"])
     }
     const schemas = (representation as { readonly schemas?: unknown }).schemas
     if (schemas === undefined) {
       return []
     }
     if (!Array.isArray(schemas)) {
-      return failCompiler({
-        _tag: "InvalidDocument",
-        path: [...path, "representation", "schemas"],
-        cause: schemas
-      })
+      throw errorWithPath("Invalid schema representation document", [...path, "representation", "schemas"])
     }
     return schemas.map((schema, index) =>
       recur(
@@ -2101,32 +2032,20 @@ function compileJsonSchema(
   function compileCheck(
     check: SchemaRepresentation.Check<SchemaRepresentation.LiveAnnotations>,
     type: JsonSchema.Type | undefined,
-    path: SchemaRepresentation.Path
+    path: Path
   ): JsonSchema.JsonSchema | undefined {
     const annotations = check.annotations
     const callback = getDataAnnotation(annotations, "toJsonSchema")
-    if (check._tag === "Filter") {
-      if (!Predicate.isFunction(callback)) {
-        return undefined
-      }
-      const schemas = annotationSchemas(annotations, [...path, "annotations"])
-      const fragment = invokeJsonSchemaCallback(
-        () => callback({ type, schemas }),
-        [...path, "annotations", "toJsonSchema"]
-      )
-      const ordinary = collectJsonSchemaAnnotations(annotations, options)
-      return ordinary === undefined ? fragment : { ...fragment, ...ordinary }
-    }
-
     if (Predicate.isFunction(callback)) {
       const schemas = annotationSchemas(annotations, [...path, "annotations"])
-      const fragment = invokeJsonSchemaCallback(
-        () => callback({ type, schemas }),
+      const fragment = validateJsonSchemaResult(
+        callback({ type, schemas }),
         [...path, "annotations", "toJsonSchema"]
       )
       const ordinary = collectJsonSchemaAnnotations(annotations, options)
       return ordinary === undefined ? fragment : { ...fragment, ...ordinary }
     }
+    if (check._tag === "Filter") return undefined
 
     const children = check.checks
       .map((child, index) => compileCheck(child, type, [...path, "checks", index]))
@@ -2141,11 +2060,11 @@ function compileJsonSchema(
 
   function recur(
     representation: SchemaRepresentation.LiveRepresentation,
-    path: SchemaRepresentation.Path
+    path: Path
   ): JsonSchema.JsonSchema {
     if (representation._tag === "Reference") {
       if (!hasOwn.call(references, representation.$ref)) {
-        return failCompiler({ _tag: "InvalidReference", path: [...path, "$ref"], $ref: representation.$ref })
+        throw errorWithPath(`Invalid reference ${representation.$ref}`, [...path, "$ref"])
       }
       return { $ref: `#/$defs/${escapeToken(representation.$ref)}` }
     }
@@ -2155,8 +2074,8 @@ function compileJsonSchema(
     if (ordinary !== undefined) {
       output = { ...output, ...ordinary }
     }
-    const type = typeof output.type === "string" && isJsonSchemaType(output.type) ? output.type : undefined
     for (let index = 0; index < representation.checks.length; index++) {
+      const type = typeof output.type === "string" && isJsonSchemaType(output.type) ? output.type : undefined
       const check = compileCheck(representation.checks[index], type, [...path, "checks", index])
       if (check !== undefined) {
         output = appendJsonSchema(output, check)
@@ -2167,7 +2086,7 @@ function compileJsonSchema(
 
   function on(
     representation: Exclude<SchemaRepresentation.LiveRepresentation, SchemaRepresentation.Reference>,
-    path: SchemaRepresentation.Path
+    path: Path
   ): JsonSchema.JsonSchema {
     switch (representation._tag) {
       case "Any":
@@ -2187,13 +2106,13 @@ function compileJsonSchema(
         const callback = getDataAnnotation(representation.annotations, "toJsonSchema")
         const callbackPath = [...path, "annotations", "toJsonSchema"]
         if (!Predicate.isFunction(callback)) {
-          return failCompiler({ _tag: "MissingJsonSchema", path: callbackPath })
+          throw errorWithPath("Missing JSON Schema callback", callbackPath)
         }
         const typeParameters = representation.typeParameters.map((typeParameter, index) =>
           recur(typeParameter, [...path, "typeParameters", index])
         )
         const schemas = annotationSchemas(representation.annotations, [...path, "annotations"])
-        return invokeJsonSchemaCallback(() => callback({ typeParameters, schemas }), callbackPath)
+        return validateJsonSchemaResult(callback({ typeParameters, schemas }), callbackPath)
       }
       case "Suspend":
         return recur(representation.thunk, [...path, "thunk"])
@@ -2238,11 +2157,7 @@ function compileJsonSchema(
         return { type: "string", pattern: `^${representation.parts.map(getPartPattern).join("")}$` }
       case "Arrays": {
         if (representation.rest.length > 1) {
-          return failCompiler({
-            _tag: "InvalidDocument",
-            path: [...path, "rest"],
-            cause: "Generating JSON Schema for post-rest elements is not supported"
-          })
+          throw errorWithPath("Invalid schema representation document", [...path, "rest"])
         }
         const out: JsonSchema.JsonSchema = { type: "array" }
         let minItems = representation.elements.length
@@ -2277,11 +2192,12 @@ function compileJsonSchema(
         for (let index = 0; index < representation.propertySignatures.length; index++) {
           const property = representation.propertySignatures[index]
           if (typeof property.name !== "string") {
-            return failCompiler({
-              _tag: "InvalidDocument",
-              path: [...path, "propertySignatures", index, "name"],
-              cause: property.name
-            })
+            throw errorWithPath("Invalid schema representation document", [
+              ...path,
+              "propertySignatures",
+              index,
+              "name"
+            ])
           }
           const compiled = recur(property.type, [...path, "propertySignatures", index, "type"])
           const annotations = collectJsonSchemaAnnotations(property.annotations, options)
@@ -2337,13 +2253,13 @@ function compileJsonSchema(
 
   function getParameterPatterns(
     parameter: SchemaRepresentation.LiveRepresentation,
-    path: SchemaRepresentation.Path,
+    path: Path,
     seenReferences: ReadonlySet<string>
   ): ReadonlyArray<string> {
     switch (parameter._tag) {
       case "Reference": {
         if (!hasOwn.call(references, parameter.$ref)) {
-          return failCompiler({ _tag: "InvalidReference", path: [...path, "$ref"], $ref: parameter.$ref })
+          throw errorWithPath(`Invalid reference ${parameter.$ref}`, [...path, "$ref"])
         }
         if (seenReferences.has(parameter.$ref)) return []
         const next = new Set(seenReferences)
@@ -2359,7 +2275,7 @@ function compileJsonSchema(
           getParameterPatterns(type, [...path, "types", index], seenReferences)
         )
       default:
-        return failCompiler({ _tag: "InvalidDocument", path, cause: parameter._tag })
+        throw errorWithPath("Invalid schema representation document", path)
     }
   }
 }
@@ -2415,7 +2331,7 @@ function getPartPattern(part: SchemaRepresentation.LiveRepresentation): string {
     case "Union":
       return part.types.map(getPartPattern).join("|")
     default:
-      return failCompiler({ _tag: "InvalidDocument", path: [], cause: part._tag })
+      throw errorWithPath("Invalid schema representation document", [])
   }
 }
 
@@ -2423,34 +2339,30 @@ function getPartPattern(part: SchemaRepresentation.LiveRepresentation): string {
 export function toJsonSchemaDocument(
   document: SchemaRepresentation.Document<SchemaRepresentation.LiveAnnotations>,
   options?: Schema.ToJsonSchemaOptions
-): ProjectionResult<JsonSchema.Document<"draft-2020-12">> {
-  return captureCompiler(() => {
-    const output = compileJsonSchema(
-      [document.representation],
-      [["representation"]],
-      document.references,
-      options
-    )
-    return {
-      dialect: output.dialect,
-      schema: output.schemas[0],
-      definitions: output.definitions
-    }
-  })
+): JsonSchema.Document<"draft-2020-12"> {
+  const output = compileJsonSchema(
+    [document.representation],
+    [["representation"]],
+    document.references,
+    options
+  )
+  return {
+    dialect: output.dialect,
+    schema: output.schemas[0],
+    definitions: output.definitions
+  }
 }
 
 /** @internal */
 export function toJsonSchemaMultiDocument(
   document: SchemaRepresentation.MultiDocument<SchemaRepresentation.LiveAnnotations>,
   options?: Schema.ToJsonSchemaOptions
-): ProjectionResult<JsonSchema.MultiDocument<"draft-2020-12">> {
-  return captureCompiler(() =>
-    compileJsonSchema(
-      document.representations,
-      document.representations.map((_, index) => ["representations", index]),
-      document.references,
-      options
-    )
+): JsonSchema.MultiDocument<"draft-2020-12"> {
+  return compileJsonSchema(
+    document.representations,
+    document.representations.map((_, index) => ["representations", index]),
+    document.references,
+    options
   )
 }
 
@@ -2460,8 +2372,7 @@ function makeCode(runtime: string, Type: string): SchemaRepresentation.Code {
 
 function validateImportDeclarations(
   input: unknown,
-  path: SchemaRepresentation.Path,
-  actual: unknown
+  path: Path
 ): ReadonlyArray<string> {
   if (input === undefined) return []
   const data = readArrayData(input)
@@ -2469,14 +2380,14 @@ function validateImportDeclarations(
     data._tag === "Failure" ||
     data.values.some((value) => typeof value !== "string" || value.length === 0)
   ) {
-    return failCompiler({ _tag: "InvalidGenerationResult", path, actual })
+    throw errorWithPath("Invalid generation callback result", path)
   }
   return data.values as ReadonlyArray<string>
 }
 
 function validateGenerationObject(
   input: unknown,
-  path: SchemaRepresentation.Path
+  path: Path
 ): Record<string, unknown> {
   if (
     typeof input !== "object" ||
@@ -2484,7 +2395,7 @@ function validateGenerationObject(
     Array.isArray(input) ||
     (Object.getPrototypeOf(input) !== Object.prototype && Object.getPrototypeOf(input) !== null)
   ) {
-    return failCompiler({ _tag: "InvalidGenerationResult", path, actual: input })
+    throw errorWithPath("Invalid generation callback result", path)
   }
   return input as Record<string, unknown>
 }
@@ -2492,13 +2403,12 @@ function validateGenerationObject(
 function getGenerationField(
   output: Record<string, unknown>,
   key: string,
-  path: SchemaRepresentation.Path,
-  actual: unknown
+  path: Path
 ): unknown {
   const descriptor = Object.getOwnPropertyDescriptor(output, key)
   if (descriptor === undefined) return undefined
   if (!isDataDescriptor(descriptor) || descriptor.enumerable !== true) {
-    return failCompiler({ _tag: "InvalidGenerationResult", path, actual })
+    throw errorWithPath("Invalid generation callback result", path)
   }
   return descriptor.value
 }
@@ -2506,49 +2416,43 @@ function getGenerationField(
 function invokeDeclarationGeneration(
   callback: SchemaRepresentation.Generation.Declaration,
   input: SchemaRepresentation.Generation.DeclarationInput,
-  path: SchemaRepresentation.Path
-): SchemaRepresentation.Generation.DeclarationOutput {
-  const result = Result.try(() => callback(input))
-  if (Result.isFailure(result)) {
-    return failCompiler({ _tag: "InvalidGenerationResult", path, cause: result.failure })
-  }
-  const output = validateGenerationObject(result.success, path)
-  const runtime = getGenerationField(output, "runtime", path, result.success)
-  const Type = getGenerationField(output, "Type", path, result.success)
-  const importDeclarations = getGenerationField(output, "importDeclarations", path, result.success)
+  path: Path
+) {
+  const result = callback(input)
+  const output = validateGenerationObject(result, path)
+  const runtime = getGenerationField(output, "runtime", path)
+  const Type = getGenerationField(output, "Type", path)
+  const importDeclarations = getGenerationField(output, "importDeclarations", path)
   if (
     typeof runtime !== "string" ||
     runtime.length === 0 ||
     typeof Type !== "string" ||
     Type.length === 0
   ) {
-    return failCompiler({ _tag: "InvalidGenerationResult", path, actual: result.success })
+    throw errorWithPath("Invalid generation callback result", path)
   }
   return {
     runtime,
     Type,
-    importDeclarations: validateImportDeclarations(importDeclarations, path, result.success)
+    importDeclarations: validateImportDeclarations(importDeclarations, path)
   }
 }
 
 function invokeCheckGeneration(
   callback: SchemaRepresentation.Generation.Check,
   input: SchemaRepresentation.Generation.CheckInput,
-  path: SchemaRepresentation.Path
-): SchemaRepresentation.Generation.CheckOutput {
-  const result = Result.try(() => callback(input))
-  if (Result.isFailure(result)) {
-    return failCompiler({ _tag: "InvalidGenerationResult", path, cause: result.failure })
-  }
-  const output = validateGenerationObject(result.success, path)
-  const runtime = getGenerationField(output, "runtime", path, result.success)
-  const importDeclarations = getGenerationField(output, "importDeclarations", path, result.success)
+  path: Path
+) {
+  const result = callback(input)
+  const output = validateGenerationObject(result, path)
+  const runtime = getGenerationField(output, "runtime", path)
+  const importDeclarations = getGenerationField(output, "importDeclarations", path)
   if (typeof runtime !== "string" || runtime.length === 0) {
-    return failCompiler({ _tag: "InvalidGenerationResult", path, actual: result.success })
+    throw errorWithPath("Invalid generation callback result", path)
   }
   return {
     runtime,
-    importDeclarations: validateImportDeclarations(importDeclarations, path, result.success)
+    importDeclarations: validateImportDeclarations(importDeclarations, path)
   }
 }
 
@@ -2649,36 +2553,15 @@ function renderAnnotations(
   return entries.length === 0 ? undefined : `{ ${entries.join(", ")} }`
 }
 
-function sanitizeJavaScriptIdentifier(input: string): string {
+export function sanitizeJavaScriptIdentifier(input: string): string {
   if (input.length === 0) return "_"
-  const out: Array<string> = []
-  let prefix = false
-  let index = 0
-  for (const character of input) {
-    if (index === 0) {
-      if (character === "_" || character === "$" || (character >= "A" && character <= "Z")) {
-        out.push(character)
-      } else if (character >= "a" && character <= "z") {
-        out.push(character.toUpperCase())
-      } else if (character >= "0" && character <= "9") {
-        out.push(character)
-        prefix = true
-      } else {
-        out.push("_")
-      }
-    } else {
-      out.push(
-        character === "_" || character === "$" ||
-          (character >= "A" && character <= "Z") ||
-          (character >= "a" && character <= "z") ||
-          (character >= "0" && character <= "9")
-          ? character
-          : "_"
-      )
-    }
-    index++
-  }
-  return prefix ? `_${out.join("")}` : out.join("")
+  const out = input.replace(/[^A-Za-z0-9_$]/gu, "_")
+  const first = out[0]
+  return first >= "a" && first <= "z"
+    ? first.toUpperCase() + out.slice(1)
+    : first >= "0" && first <= "9"
+    ? `_${out}`
+    : out
 }
 
 function renderLiteral(value: string | number | boolean | bigint): string {
@@ -2727,7 +2610,7 @@ function toTypePart(part: SchemaRepresentation.LiveRepresentation): ReadonlyArra
   }
 }
 
-interface TopologicalSort {
+export interface TopologicalSort {
   readonly nonRecursives: ReadonlyArray<{
     readonly $ref: string
     readonly representation: SchemaRepresentation.LiveRepresentation
@@ -2735,7 +2618,7 @@ interface TopologicalSort {
   readonly recursives: Readonly<Record<string, SchemaRepresentation.LiveRepresentation>>
 }
 
-function topologicalSort(
+export function topologicalSort(
   references: SchemaRepresentation.References<SchemaRepresentation.LiveAnnotations>
 ): TopologicalSort {
   const identifiers = Object.keys(references)
@@ -2817,17 +2700,15 @@ function topologicalSort(
   function visit(identifier: string): void {
     const current = state.get(identifier) ?? 0
     if (current === 1) {
-      const start = stackIndexes.get(identifier)
-      if (start !== undefined) {
-        for (let index = start; index < stack.length; index++) recursive.add(stack[index])
-      }
+      const start = stackIndexes.get(identifier)!
+      for (let index = start; index < stack.length; index++) recursive.add(stack[index])
       return
     }
     if (current === 2) return
     state.set(identifier, 1)
     stackIndexes.set(identifier, stack.length)
     stack.push(identifier)
-    for (const dependency of dependencies.get(identifier) ?? []) visit(dependency)
+    for (const dependency of dependencies.get(identifier)!) visit(dependency)
     stack.pop()
     stackIndexes.delete(identifier)
     state.set(identifier, 2)
@@ -2847,7 +2728,7 @@ function topologicalSort(
     if (recursive.has(identifier)) continue
     for (const dependency of internalDependencies) {
       if (recursive.has(dependency)) continue
-      inDegree.set(identifier, (inDegree.get(identifier) ?? 0) + 1)
+      inDegree.set(identifier, inDegree.get(identifier)! + 1)
       dependents.get(dependency)?.add(identifier)
     }
   }
@@ -2863,8 +2744,8 @@ function topologicalSort(
   for (let index = 0; index < queue.length; index++) {
     const $ref = queue[index]
     nonRecursives.push({ $ref, representation: references[$ref] })
-    for (const dependent of dependents.get($ref) ?? []) {
-      const degree = (inDegree.get(dependent) ?? 0) - 1
+    for (const dependent of dependents.get($ref)!) {
+      const degree = inDegree.get(dependent)! - 1
       inDegree.set(dependent, degree)
       if (degree === 0) queue.push(dependent)
     }
@@ -2906,11 +2787,7 @@ function compileCodeDocument(
   function ensureUniqueIdentifier(original: string): string {
     const existing = sanitizedReferences.get(original)
     if (existing !== undefined) return existing
-    const seed = sanitizeJavaScriptIdentifier(original)
-    let candidate = seed
-    let suffix = 0
-    while (uniqueIdentifiers.has(candidate)) candidate = `${seed}${++suffix}`
-    uniqueIdentifiers.add(candidate)
+    const candidate = freshIdentifier(original)
     sanitizedReferences.set(original, candidate)
     return candidate
   }
@@ -2930,8 +2807,7 @@ function compileCodeDocument(
     }
   }
 
-  function addImports(importDeclarations: ReadonlyArray<string> | undefined): void {
-    if (importDeclarations === undefined) return
+  function addImports(importDeclarations: ReadonlyArray<string>): void {
     for (const importDeclaration of importDeclarations) addImport(importDeclaration)
   }
 
@@ -2969,21 +2845,17 @@ function compileCodeDocument(
 
   function annotationSchemas(
     annotations: Schema.Annotations.Annotations | undefined,
-    path: SchemaRepresentation.Path
+    path: Path
   ): ReadonlyArray<SchemaRepresentation.Code> {
     const representation = getDataAnnotation(annotations, "representation")
     if (representation === undefined) return []
     if (typeof representation !== "object" || representation === null || Array.isArray(representation)) {
-      return failCompiler({ _tag: "InvalidDocument", path: [...path, "representation"], cause: representation })
+      throw errorWithPath("Invalid schema representation document", [...path, "representation"])
     }
     const schemas = (representation as { readonly schemas?: unknown }).schemas
     if (schemas === undefined) return []
     if (!Array.isArray(schemas)) {
-      return failCompiler({
-        _tag: "InvalidDocument",
-        path: [...path, "representation", "schemas"],
-        cause: schemas
-      })
+      throw errorWithPath("Invalid schema representation document", [...path, "representation", "schemas"])
     }
     return schemas.map((schema, index) =>
       recur(
@@ -3032,15 +2904,12 @@ function compileCodeDocument(
 
   function compileCheck(
     check: SchemaRepresentation.Check<SchemaRepresentation.LiveAnnotations>,
-    path: SchemaRepresentation.Path
+    path: Path
   ): string {
     const callback = getDataAnnotation(check.annotations, "generation")
     const callbackPath = [...path, "annotations", "generation"]
     let runtime: string
-    if (check._tag === "Filter") {
-      if (!Predicate.isFunction(callback)) {
-        return failCompiler({ _tag: "MissingGeneration", path: callbackPath })
-      }
+    if (Predicate.isFunction(callback)) {
       const schemas = annotationSchemas(check.annotations, [...path, "annotations"])
       const output = invokeCheckGeneration(
         callback as SchemaRepresentation.Generation.Check,
@@ -3049,15 +2918,8 @@ function compileCodeDocument(
       )
       addImports(output.importDeclarations)
       runtime = output.runtime
-    } else if (Predicate.isFunction(callback)) {
-      const schemas = annotationSchemas(check.annotations, [...path, "annotations"])
-      const output = invokeCheckGeneration(
-        callback as SchemaRepresentation.Generation.Check,
-        { schemas },
-        callbackPath
-      )
-      addImports(output.importDeclarations)
-      runtime = output.runtime
+    } else if (check._tag === "Filter") {
+      throw errorWithPath("Missing generation callback", callbackPath)
     } else {
       runtime = `Schema.makeFilterGroup([${
         check.checks.map((child, index) => compileCheck(child, [...path, "checks", index])).join(", ")
@@ -3071,7 +2933,7 @@ function compileCodeDocument(
   function applyNode(
     base: SchemaRepresentation.Code,
     representation: Exclude<SchemaRepresentation.LiveRepresentation, SchemaRepresentation.Reference>,
-    path: SchemaRepresentation.Path,
+    path: Path,
     includeTypeBrands: boolean = true
   ): SchemaRepresentation.Code {
     const nodeBrands = ownBrands(representation.annotations)
@@ -3088,7 +2950,7 @@ function compileCodeDocument(
 
   function recurString(
     representation: SchemaRepresentation.String<SchemaRepresentation.LiveAnnotations>,
-    path: SchemaRepresentation.Path
+    path: Path
   ): SchemaRepresentation.Code {
     const contentSchema = representation.contentSchema === undefined
       ? undefined
@@ -3123,11 +2985,11 @@ function compileCodeDocument(
 
   function recur(
     representation: SchemaRepresentation.LiveRepresentation,
-    path: SchemaRepresentation.Path
+    path: Path
   ): SchemaRepresentation.Code {
     if (representation._tag === "Reference") {
       if (!hasOwn.call(document.references, representation.$ref)) {
-        return failCompiler({ _tag: "InvalidReference", path: [...path, "$ref"], $ref: representation.$ref })
+        throw errorWithPath(`Invalid reference ${representation.$ref}`, [...path, "$ref"])
       }
       const identifier = ensureUniqueIdentifier(representation.$ref)
       return makeCode(identifier, identifier)
@@ -3141,14 +3003,14 @@ function compileCodeDocument(
       SchemaRepresentation.LiveRepresentation,
       SchemaRepresentation.Reference | SchemaRepresentation.String<SchemaRepresentation.LiveAnnotations>
     >,
-    path: SchemaRepresentation.Path
+    path: Path
   ): SchemaRepresentation.Code {
     switch (representation._tag) {
       case "Declaration": {
         const callback = getDataAnnotation(representation.annotations, "generation")
         const callbackPath = [...path, "annotations", "generation"]
         if (!Predicate.isFunction(callback)) {
-          return failCompiler({ _tag: "MissingGeneration", path: callbackPath })
+          throw errorWithPath("Missing generation callback", callbackPath)
         }
         const typeParameters = representation.typeParameters.map((typeParameter, index) =>
           recur(typeParameter, [...path, "typeParameters", index])
@@ -3314,14 +3176,14 @@ function compileCodeDocument(
 /** @internal */
 export function toCodeDocument(
   document: SchemaRepresentation.MultiDocument<SchemaRepresentation.LiveAnnotations>
-): ProjectionResult<SchemaRepresentation.CodeDocument> {
-  return captureCompiler(() => compileCodeDocument(document))
+): SchemaRepresentation.CodeDocument {
+  return compileCodeDocument(document)
 }
 
 /** @internal */
 export function toCodeDocumentFromSchemaMultiDocument(
   document: SchemaRepresentation.SchemaMultiDocument
-): ProjectionResult<SchemaRepresentation.CodeDocument> {
+): SchemaRepresentation.CodeDocument {
   const definitions = Object.entries(document.definitions).map(([key, schema]) => {
     const original = schema.ast
     const encoded = SchemaAST.toEncoded(original)
@@ -3329,13 +3191,28 @@ export function toCodeDocumentFromSchemaMultiDocument(
     return { key, original, encoded, body }
   })
   const asts = Arr.map(document.schemas, (schema) => SchemaAST.toEncoded(schema.ast))
-  return captureCompiler(() => compileCodeDocument(lowerASTs(asts, definitions)))
+  return compileCodeDocument(lowerASTs(asts, definitions))
 }
 
 /** @internal */
 export function fromAST(ast: SchemaAST.AST): SchemaRepresentation.Document<SchemaRepresentation.LiveAnnotations> {
   const { references, representations } = fromASTs([ast])
   return { representation: representations[0], references }
+}
+
+/** @internal */
+export function fromEncodedAST(
+  ast: SchemaAST.AST
+): SchemaRepresentation.Document<SchemaRepresentation.LiveAnnotations> {
+  const { references, representations } = fromEncodedASTs([ast])
+  return { representation: representations[0], references }
+}
+
+/** @internal */
+export function fromEncodedASTs(
+  asts: readonly [SchemaAST.AST, ...Array<SchemaAST.AST>]
+): SchemaRepresentation.MultiDocument<SchemaRepresentation.LiveAnnotations> {
+  return lowerASTs(asts, [], true)
 }
 
 /** @internal */
@@ -3354,7 +3231,8 @@ interface ExternalDefinition {
 
 function lowerASTs(
   asts: readonly [SchemaAST.AST, ...Array<SchemaAST.AST>],
-  externalDefinitions: ReadonlyArray<ExternalDefinition>
+  externalDefinitions: ReadonlyArray<ExternalDefinition>,
+  encoded = false
 ): SchemaRepresentation.MultiDocument<SchemaRepresentation.LiveAnnotations> {
   const references: Record<string, SchemaRepresentation.LiveRepresentation> = {}
   const referenceMap = new Map<SchemaAST.AST, string>()
@@ -3389,7 +3267,11 @@ function lowerASTs(
     return candidate
   }
 
-  function recur(ast: SchemaAST.AST, ownedReference?: string): SchemaRepresentation.LiveRepresentation {
+  function recur(
+    ast: SchemaAST.AST,
+    ownedReference?: string,
+    inheritedIdentifier?: string
+  ): SchemaRepresentation.LiveRepresentation {
     let found = referenceMap.get(ast)
     if (found === undefined && SchemaAST.isSuspend(ast)) {
       const bodyReference = externalBodyReferences.get(ast.thunk())
@@ -3402,7 +3284,16 @@ function lowerASTs(
       return { _tag: "Reference", $ref: found }
     }
 
-    const identifier = ownedReference === undefined ? InternalAnnotations.resolveIdentifier(ast) : undefined
+    let identifier = inheritedIdentifier
+    if (encoded) {
+      const projected = SchemaAST.getLastEncoding(ast)
+      identifier = InternalAnnotations.resolveIdentifier(ast) ?? identifier
+      if (projected !== ast) {
+        return recur(projected, ownedReference, identifier)
+      }
+    }
+
+    identifier = ownedReference === undefined ? identifier ?? InternalAnnotations.resolveIdentifier(ast) : undefined
     if (identifier !== undefined) {
       const reference = generateReference(identifier)
       referenceMap.set(ast, reference)
@@ -3507,11 +3398,14 @@ function lowerASTs(
       case "Arrays":
         return {
           _tag: "Arrays",
-          elements: ast.elements.map((element) => ({
-            isOptional: SchemaAST.isOptional(element),
-            type: recur(element),
-            ...fromKeyAnnotations(element.context?.annotations)
-          })),
+          elements: ast.elements.map((element) => {
+            const projected = encoded ? SchemaAST.getLastEncoding(element) : element
+            return {
+              isOptional: SchemaAST.isOptional(projected),
+              type: recur(element),
+              ...fromKeyAnnotations(projected.context?.annotations)
+            }
+          }),
           rest: ast.rest.map((ast) => recur(ast)),
           checks: fromChecks(ast.checks),
           ...fromNodeAnnotations(ast.annotations)
@@ -3519,13 +3413,16 @@ function lowerASTs(
       case "Objects":
         return {
           _tag: "Objects",
-          propertySignatures: ast.propertySignatures.map((property) => ({
-            name: property.name,
-            type: recur(property.type),
-            isOptional: SchemaAST.isOptional(property.type),
-            isMutable: SchemaAST.isMutable(property.type),
-            ...fromKeyAnnotations(property.type.context?.annotations)
-          })),
+          propertySignatures: ast.propertySignatures.map((property) => {
+            const projected = encoded ? SchemaAST.getLastEncoding(property.type) : property.type
+            return {
+              name: property.name,
+              type: recur(property.type),
+              isOptional: SchemaAST.isOptional(projected),
+              isMutable: SchemaAST.isMutable(projected),
+              ...fromKeyAnnotations(projected.context?.annotations)
+            }
+          }),
           indexSignatures: ast.indexSignatures.map((index) => ({
             parameter: recur(index.parameter),
             type: recur(index.type)

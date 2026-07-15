@@ -262,21 +262,11 @@ describe("SchemaRepresentation2 persisted wire codecs", () => {
     )
   })
 
-  it("wraps high-level projection failures", () => {
+  it("reports high-level projection failures", () => {
     const symbol = Symbol("local")
     throws(
       () => SchemaRepresentation2.toJson(SchemaRepresentation2.fromAST(Schema.UniqueSymbol(symbol).ast)),
-      (error) => {
-        assert.isTrue(error instanceof SchemaRepresentation2.SchemaRepresentationError)
-        if (error instanceof SchemaRepresentation2.SchemaRepresentationError) {
-          assert.deepStrictEqual(error.issue, {
-            _tag: "InvalidStructuralValue",
-            path: ["representation", "symbol"],
-            actual: symbol
-          })
-        }
-        return undefined
-      }
+      `Invalid structural value\n  at ["representation"]["symbol"]`
     )
   })
 
@@ -300,6 +290,63 @@ describe("SchemaRepresentation2 persisted wire codecs", () => {
       Schema.encodeSync(SchemaRepresentation2.PersistedMultiDocumentFromJson)(persisted),
       json
     )
+  })
+
+  it("roundtrips and revives every structural keyword kind", () => {
+    const symbol = Symbol.for("acme/schema/structural-keyword")
+    const live = SchemaRepresentation2.fromASTs([
+      Schema.Null.ast,
+      Schema.Undefined.ast,
+      Schema.Void.ast,
+      Schema.Never.ast,
+      Schema.UniqueSymbol(symbol).ast,
+      Schema.ObjectKeyword.ast
+    ])
+    const json = SchemaRepresentation2.toJsonMultiDocument(live)
+    const persisted = Schema.decodeUnknownSync(SchemaRepresentation2.PersistedMultiDocumentFromJson)(json)
+
+    assert.deepStrictEqual(
+      persisted.representations.map((representation) => representation._tag),
+      ["Null", "Undefined", "Void", "Never", "UniqueSymbol", "ObjectKeyword"]
+    )
+
+    const revived = SchemaRepresentation2.fromJsonMultiDocument(json, { revivers: [] })
+    const is = revived.schemas.map((schema) => Schema.is(schema))
+    assert.isTrue(is[0](null))
+    assert.isTrue(is[1](undefined))
+    assert.isTrue(is[2](undefined))
+    assert.isFalse(is[3](undefined))
+    assert.isTrue(is[4](symbol))
+    assert.isFalse(is[4](Symbol.for("acme/schema/other")))
+    assert.isTrue(is[5]({}))
+    assert.isFalse(is[5](null))
+  })
+
+  it("decodes and revives an empty union as Never", () => {
+    const json = {
+      representation: { _tag: "Union", types: [], mode: "anyOf", checks: [] },
+      references: {}
+    } as const
+    const persisted = Schema.decodeUnknownSync(SchemaRepresentation2.PersistedDocumentFromJson)(json)
+    assert.deepStrictEqual(persisted.representation, json.representation)
+
+    const is = Schema.is(SchemaRepresentation2.fromJson(json, { revivers: [] }))
+    assert.isFalse(is(undefined))
+    assert.isFalse(is(null))
+  })
+
+  it("reports strict-JSON failures at the root and on direct encoding", () => {
+    const rootFailure = Schema.decodeUnknownResult(SchemaRepresentation2.PersistedDocumentFromJson)(() => undefined)
+    assert.strictEqual(rootFailure._tag, "Failure")
+    if (rootFailure._tag === "Failure") {
+      assert.isTrue(rootFailure.failure.message.includes("Expected strict JSON"))
+    }
+
+    const encodeFailure = Schema.encodeUnknownResult(SchemaRepresentation2.PersistedDocumentFromJson)({
+      representation: { _tag: "Reference", $ref: "" },
+      references: {}
+    })
+    assert.strictEqual(encodeFailure._tag, "Failure")
   })
 
   it("roundtrips recursive references", () => {
@@ -339,5 +386,19 @@ describe("SchemaRepresentation2 persisted wire codecs", () => {
       assert.strictEqual(persisted.representation.contentMediaType, "application/json")
       assert.strictEqual(persisted.representation.contentSchema?._tag, "Objects")
     }
+  })
+
+  it("roundtrips enum, template literal and union nodes through revival", () => {
+    const schema = Schema.Union([
+      Schema.Enum({ A: "a" }),
+      Schema.TemplateLiteral(["prefix", Schema.String])
+    ])
+    const json = SchemaRepresentation2.toJson(SchemaRepresentation2.fromAST(schema.ast))
+    const revived = SchemaRepresentation2.fromJson(json, { revivers: [] })
+    const is = Schema.is(revived)
+
+    assert.isTrue(is("a"))
+    assert.isTrue(is("prefix-value"))
+    assert.isFalse(is("other"))
   })
 })

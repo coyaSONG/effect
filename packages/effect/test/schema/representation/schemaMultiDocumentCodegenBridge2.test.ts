@@ -54,6 +54,45 @@ describe("SchemaMultiDocument codegen bridge v2", () => {
     assert.deepStrictEqual(references.Taken1, { runtime: "Schema.String", Type: "string" })
   })
 
+  it("disambiguates colliding identifiers for non-suspend definitions", () => {
+    const output = SchemaRepresentation2.toCodeDocumentFromSchemaMultiDocument({
+      schemas: [Schema.String, Schema.Number],
+      definitions: {
+        "a-b": Schema.String,
+        "a b": Schema.Number
+      }
+    })
+
+    assert.deepStrictEqual(output.codes, [
+      { runtime: "A_b", Type: "A_b" },
+      { runtime: "A_b1", Type: "A_b1" }
+    ])
+    assert.deepStrictEqual(output.references.nonRecursives, [
+      { $ref: "A_b", code: { runtime: "Schema.String", Type: "string" } },
+      { $ref: "A_b1", code: { runtime: "Schema.Number", Type: "number" } }
+    ])
+  })
+
+  it("preserves two external keys that share the same non-suspend body", () => {
+    const Shared = Schema.Struct({ value: Schema.String })
+    const output = SchemaRepresentation2.toCodeDocumentFromSchemaMultiDocument({
+      schemas: [Shared],
+      definitions: { A: Shared, B: Shared }
+    })
+
+    assert.deepStrictEqual(output.codes, [{ runtime: "B", Type: "B" }])
+    assert.deepStrictEqual(output.references.nonRecursives, [
+      {
+        $ref: "B",
+        code: {
+          runtime: `Schema.Struct({ "value": Schema.String })`,
+          Type: `{ readonly "value": string }`
+        }
+      },
+      { $ref: "A", code: { runtime: "B", Type: "B" } }
+    ])
+  })
+
   it("preserves aliases between stable definition wrappers", () => {
     const Target = Schema.suspend(() => Schema.String)
     const Alias = Schema.suspend(() => Target)

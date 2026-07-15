@@ -1,5 +1,5 @@
 import { assert, describe, it } from "@effect/vitest"
-import { Schema, type SchemaAST, SchemaRepresentation, SchemaRepresentation2 } from "effect"
+import { Formatter, Schema, type SchemaAST, SchemaRepresentation, SchemaRepresentation2 } from "effect"
 import { throws } from "../../utils/assert.ts"
 
 interface NumberCheckCase {
@@ -121,26 +121,22 @@ function noServices(schema: Schema.Top): Schema.Codec<unknown> {
 function expectInvalidPayload(
   json: unknown,
   reviver: SchemaRepresentation2.AnyReviver,
-  pathSuffix: SchemaRepresentation2.Path = []
+  pathSuffix: ReadonlyArray<string | number> = []
 ): void {
+  const path = Formatter.formatPath([
+    "representation",
+    "checks",
+    0,
+    "annotations",
+    "representation",
+    "payload",
+    ...pathSuffix
+  ])
   throws(
     () => SchemaRepresentation2.fromJson(json, { revivers: [reviver] }),
-    (error: unknown) => {
-      assert.isTrue(error instanceof SchemaRepresentation2.SchemaRepresentationError)
-      if (error instanceof SchemaRepresentation2.SchemaRepresentationError) {
-        assert.strictEqual(error.issue._tag, "InvalidRepresentationPayload")
-        assert.deepStrictEqual(error.issue.path, [
-          "representation",
-          "checks",
-          0,
-          "annotations",
-          "representation",
-          "payload",
-          ...pathSuffix
-        ])
-      }
-      return undefined
-    }
+    `${
+      pathSuffix.length === 0 ? `Invalid representation payload for ${reviver.id}` : "Expected strict JSON"
+    }\n  at ${path}`
   )
 }
 
@@ -208,10 +204,12 @@ describe("SchemaRepresentation2 built-in number checks", () => {
     const code = SchemaRepresentation2.toCodeDocument(document)
 
     for (let index = 0; index < cases.length; index++) {
-      assert.deepStrictEqual(jsonSchema.schemas[index], {
-        ...encodedNumberJsonSchema,
-        allOf: [cases[index].jsonSchema]
-      })
+      assert.deepStrictEqual(
+        jsonSchema.schemas[index],
+        index < 2
+          ? cases[index].jsonSchema
+          : { ...encodedNumberJsonSchema, allOf: [cases[index].jsonSchema] }
+      )
       assert.isTrue(code.codes[index].runtime.includes(cases[index].runtime))
     }
   })
@@ -259,21 +257,7 @@ describe("SchemaRepresentation2 built-in number checks", () => {
     })
     throws(
       () => SchemaRepresentation2.toJson(SchemaRepresentation2.fromAST(Schema.Number.check(check).ast)),
-      (error: unknown) => {
-        assert.isTrue(error instanceof SchemaRepresentation2.SchemaRepresentationError)
-        if (error instanceof SchemaRepresentation2.SchemaRepresentationError) {
-          assert.strictEqual(error.issue._tag, "InvalidRepresentationPayload")
-          assert.deepStrictEqual(error.issue.path, [
-            "representation",
-            "checks",
-            0,
-            "annotations",
-            "representation",
-            "payload"
-          ])
-        }
-        return undefined
-      }
+      `Invalid representation payload for effect/schema/isGreaterThan\n  at ["representation"]["checks"][0]["annotations"]["representation"]["payload"]`
     )
   })
 })

@@ -141,6 +141,18 @@ describe("JSON Schema importer v2", () => {
     assert.isTrue(Schema.decodeUnknownResult(noServices(schema))({ value: "x" })._tag === "Failure")
   })
 
+  it("contextualizes invalid JSON Schema values", () => {
+    throws(
+      () =>
+        SchemaRepresentation2.fromJsonSchemaDocument({
+          dialect: "draft-2020-12",
+          schema: { type: "string", invalid: undefined },
+          definitions: {}
+        }),
+      `Invalid schema representation document\n  at ["schema"]["invalid"]`
+    )
+  })
+
   it("contextualizes invalid onEnter results", () => {
     throws(
       () =>
@@ -152,13 +164,21 @@ describe("JSON Schema importer v2", () => {
           onEnter: () => [] as any
         }),
       (error: unknown) => {
-        assert.isTrue(error instanceof SchemaRepresentation2.SchemaRepresentationError)
-        if (error instanceof SchemaRepresentation2.SchemaRepresentationError) {
-          assert.strictEqual(error.issue._tag, "InvalidDocument")
-          assert.deepStrictEqual(error.issue.path, ["schema"])
-        }
+        assert.instanceOf(error, Error)
+        assert.strictEqual(error.message, "Invalid schema representation document\n  at [\"schema\"]")
         return undefined
       }
+    )
+    throws(
+      () =>
+        SchemaRepresentation2.toSchemaFromJsonSchemaDocument({
+          dialect: "draft-2020-12",
+          schema: { type: "string" },
+          definitions: {}
+        }, {
+          onEnter: () => ({ type: "string", invalid: undefined })
+        }),
+      `Invalid schema representation document\n  at ["schema"]["invalid"]`
     )
   })
 
@@ -177,20 +197,13 @@ describe("JSON Schema importer v2", () => {
           }
         }),
       (error: unknown) => {
-        assert.isTrue(error instanceof SchemaRepresentation2.SchemaRepresentationError)
-        if (error instanceof SchemaRepresentation2.SchemaRepresentationError) {
-          assert.strictEqual(error.issue._tag, "InvalidDocument")
-          assert.deepStrictEqual(error.issue.path, ["schemas", 0])
-          if (error.issue._tag === "InvalidDocument") {
-            assert.strictEqual(error.issue.cause, cause)
-          }
-        }
+        assert.strictEqual(error, cause)
         return undefined
       }
     )
   })
 
-  it("preserves primitive checks when allOf narrows to a literal", () => {
+  it("reduces an impossible refined literal to Never", () => {
     const schema = SchemaRepresentation2.toSchemaFromJsonSchemaDocument({
       dialect: "draft-2020-12",
       schema: {
@@ -205,11 +218,7 @@ describe("JSON Schema importer v2", () => {
     assert.isTrue(Schema.decodeUnknownResult(noServices(schema))("a")._tag === "Failure")
     assert.deepStrictEqual(Schema.toJsonSchemaDocument2(schema), {
       dialect: "draft-2020-12",
-      schema: {
-        type: "string",
-        enum: ["a"],
-        allOf: [{ minLength: 2 }]
-      },
+      schema: { not: {} },
       definitions: {}
     })
   })
@@ -236,7 +245,7 @@ describe("JSON Schema importer v2", () => {
     assert.deepStrictEqual(Object.keys(document.definitions), ["Value", "Alias"])
   })
 
-  it("does not compact unions whose literals carry checks or annotations", () => {
+  it("does not compact unions containing Never or annotated literals", () => {
     const checked = SchemaRepresentation2.toSchemaFromJsonSchemaDocument({
       dialect: "draft-2020-12",
       schema: {
@@ -274,7 +283,7 @@ describe("JSON Schema importer v2", () => {
         schemas: [checked],
         definitions: {}
       }).codes[0].runtime,
-      "Schema.isMinLength(2)"
+      "Schema.Never"
     )
 
     const simple = SchemaRepresentation2.toSchemaFromJsonSchemaDocument({
@@ -315,20 +324,36 @@ describe("JSON Schema importer v2", () => {
     )
 
     const emitted = Schema.toJsonSchemaDocument2(document.schemas[0])
-    assert.deepStrictEqual(emitted.schema, {
-      type: "string",
-      contentMediaType: "application/json",
-      contentSchema: { $ref: "#/$defs/Payload" }
+    assert.deepStrictEqual(emitted, {
+      dialect: "draft-2020-12",
+      schema: { $ref: "#/$defs/PayloadJsonString" },
+      definitions: {
+        Payload: {
+          type: "object",
+          properties: { value: { type: "number" } },
+          required: ["value"],
+          additionalProperties: false
+        },
+        PayloadJsonString: {
+          type: "string",
+          contentMediaType: "application/json",
+          contentSchema: { $ref: "#/$defs/Payload" }
+        }
+      }
     })
-    assert.deepStrictEqual(Object.keys(emitted.definitions), ["Payload"])
 
     const code = SchemaRepresentation2.toCodeDocumentFromSchemaMultiDocument(document)
     const referenceKeys = [
       ...code.references.nonRecursives.map(({ $ref }) => $ref),
       ...Object.keys(code.references.recursives)
     ]
-    assert.deepStrictEqual(referenceKeys, ["Payload"])
-    assertInclude(code.codes[0].runtime, "SchemaTransformation.fromJsonString")
-    assertInclude(code.codes[0].runtime, "Payload")
+    assert.deepStrictEqual(referenceKeys, ["Payload", "PayloadJsonString"])
+    assert.strictEqual(code.codes[0].runtime, "PayloadJsonString")
+    const references = {
+      ...Object.fromEntries(code.references.nonRecursives.map(({ $ref, code }) => [$ref, code])),
+      ...code.references.recursives
+    }
+    assertInclude(references.PayloadJsonString.runtime, "SchemaTransformation.fromJsonString")
+    assertInclude(references.PayloadJsonString.runtime, "Payload")
   })
 })

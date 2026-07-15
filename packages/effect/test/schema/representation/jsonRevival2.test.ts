@@ -32,17 +32,15 @@ function noServices(schema: Schema.Top): Schema.Codec<unknown> {
   return schema as Schema.Codec<unknown>
 }
 
-function issueFrom(run: () => unknown): SchemaRepresentation2.SchemaRepresentationIssue {
-  let issue: SchemaRepresentation2.SchemaRepresentationIssue | undefined
-  throws(run, (error) => {
-    assert.isTrue(error instanceof SchemaRepresentation2.SchemaRepresentationError)
-    if (error instanceof SchemaRepresentation2.SchemaRepresentationError) {
-      issue = error.issue
-    }
+function errorFrom(run: () => unknown): Error {
+  let result: Error | undefined
+  throws(run, (error: unknown) => {
+    assert.instanceOf(error, Error)
+    result = error
     return undefined
   })
-  assert.isDefined(issue)
-  return issue
+  assert.isDefined(result)
+  return result
 }
 
 describe("SchemaRepresentation2 JSON revival", () => {
@@ -145,54 +143,35 @@ describe("SchemaRepresentation2 JSON revival", () => {
   })
 
   it("reports a missing reviver at the persistence identity", () => {
-    assert.deepStrictEqual(issueFrom(() => SchemaRepresentation2.fromJson(filterJson(), { revivers: [] })), {
-      _tag: "MissingReviver",
-      path: ["representation", "checks", 0, "annotations", "representation"],
-      id: filterId
-    })
+    assert.strictEqual(
+      errorFrom(() => SchemaRepresentation2.fromJson(filterJson(), { revivers: [] })).message,
+      `Missing reviver for ${filterId}\n  at ["representation"]["checks"][0]["annotations"]["representation"]`
+    )
   })
 
   it("rejects duplicate IDs before traversing the document", () => {
-    assert.deepStrictEqual(
-      issueFrom(() =>
+    assert.strictEqual(
+      errorFrom(() =>
         SchemaRepresentation2.fromJson(
           { representation: { _tag: "String", checks: [] }, references: {} },
           { revivers: [minLengthReviver, minLengthReviver] }
         )
-      ),
-      {
-        _tag: "DuplicateReviver",
-        path: ["revivers", 1, "id"],
-        id: filterId,
-        firstIndex: 0,
-        duplicateIndex: 1
-      }
+      ).message,
+      `Duplicate reviver for ${filterId}\n  at ["revivers"][1]["id"]`
     )
   })
 
   it("validates declared and effective arities", () => {
     const invalidDeclared = { ...minLengthReviver, schemasArity: -1 }
-    assert.deepStrictEqual(
-      issueFrom(() => SchemaRepresentation2.fromJson(filterJson(), { revivers: [invalidDeclared] })),
-      {
-        _tag: "InvalidReviverArity",
-        path: ["revivers", 0, "schemasArity"],
-        id: filterId,
-        field: "schemasArity",
-        actual: -1
-      }
+    assert.strictEqual(
+      errorFrom(() => SchemaRepresentation2.fromJson(filterJson(), { revivers: [invalidDeclared] })).message,
+      `Invalid schemasArity for ${filterId}\n  at ["revivers"][0]["schemasArity"]`
     )
 
     const expectsSchema = { ...minLengthReviver, schemasArity: 1 }
-    assert.deepStrictEqual(
-      issueFrom(() => SchemaRepresentation2.fromJson(filterJson(), { revivers: [expectsSchema] })),
-      {
-        _tag: "InvalidSchemasArity",
-        path: ["representation", "checks", 0, "annotations", "representation", "schemas"],
-        id: filterId,
-        expected: 1,
-        actual: 0
-      }
+    assert.strictEqual(
+      errorFrom(() => SchemaRepresentation2.fromJson(filterJson(), { revivers: [expectsSchema] })).message,
+      `Invalid schemas arity for ${filterId}: expected 1, got 0\n  at ["representation"]["checks"][0]["annotations"]["representation"]["schemas"]`
     )
 
     const declarationId = "acme/schema/Declaration"
@@ -209,52 +188,28 @@ describe("SchemaRepresentation2 JSON revival", () => {
       revive: () => Schema.String
     }
     const invalidDeclaredTypeParameters = { ...invalidTypeParameters, typeParametersArity: 0.5 }
-    assert.deepStrictEqual(
-      issueFrom(() =>
+    assert.strictEqual(
+      errorFrom(() =>
         SchemaRepresentation2.fromJson(
           { representation: { _tag: "String", checks: [] }, references: {} },
           { revivers: [invalidDeclaredTypeParameters] }
         )
-      ),
-      {
-        _tag: "InvalidReviverArity",
-        path: ["revivers", 0, "typeParametersArity"],
-        id: declarationId,
-        field: "typeParametersArity",
-        actual: 0.5
-      }
+      ).message,
+      `Invalid typeParametersArity for ${declarationId}\n  at ["revivers"][0]["typeParametersArity"]`
     )
-    assert.deepStrictEqual(
-      issueFrom(() => SchemaRepresentation2.fromJson(declarationJson, { revivers: [invalidTypeParameters] })),
-      {
-        _tag: "InvalidTypeParametersArity",
-        path: ["representation", "typeParameters"],
-        id: declarationId,
-        expected: 1,
-        actual: 0
-      }
+    assert.strictEqual(
+      errorFrom(() => SchemaRepresentation2.fromJson(declarationJson, { revivers: [invalidTypeParameters] })).message,
+      `Invalid type parameters arity for ${declarationId}: expected 1, got 0\n  at ["representation"]["typeParameters"]`
     )
   })
 
   it("validates payloads, reviver kinds and callback results", () => {
     const invalidPayload = filterJson() as any
     invalidPayload.representation.checks[0].annotations.representation.payload = { minimum: "two" }
-    const payloadIssue = issueFrom(() =>
-      SchemaRepresentation2.fromJson(invalidPayload, { revivers: [minLengthReviver] })
+    assert.strictEqual(
+      errorFrom(() => SchemaRepresentation2.fromJson(invalidPayload, { revivers: [minLengthReviver] })).message,
+      `Invalid representation payload for ${filterId}\n  at ["representation"]["checks"][0]["annotations"]["representation"]["payload"]`
     )
-    assert.strictEqual(payloadIssue._tag, "InvalidRepresentationPayload")
-    assert.deepStrictEqual(payloadIssue.path, [
-      "representation",
-      "checks",
-      0,
-      "annotations",
-      "representation",
-      "payload"
-    ])
-    if (payloadIssue._tag === "InvalidRepresentationPayload") {
-      assert.strictEqual(payloadIssue.id, filterId)
-      assert.isDefined(payloadIssue.cause)
-    }
 
     const wrongKind: SchemaRepresentation2.DeclarationReviver<{ readonly minimum: number }> = {
       _tag: "Declaration",
@@ -264,34 +219,19 @@ describe("SchemaRepresentation2 JSON revival", () => {
       typeParametersArity: 0,
       revive: () => Schema.String
     }
-    assert.deepStrictEqual(
-      issueFrom(() => SchemaRepresentation2.fromJson(filterJson(), { revivers: [wrongKind] })),
-      {
-        _tag: "InvalidReviverKind",
-        path: ["representation", "checks", 0, "annotations", "representation"],
-        id: filterId,
-        expected: "Filter",
-        actual: "Declaration"
-      }
+    assert.strictEqual(
+      errorFrom(() => SchemaRepresentation2.fromJson(filterJson(), { revivers: [wrongKind] })).message,
+      `Invalid reviver kind for ${filterId}\n  at ["representation"]["checks"][0]["annotations"]["representation"]`
     )
 
     const invalidResult: SchemaRepresentation2.FilterReviver<{ readonly minimum: number }> = {
       ...minLengthReviver,
       revive: () => Schema.String.ast as any
     }
-    const resultIssue = issueFrom(() => SchemaRepresentation2.fromJson(filterJson(), { revivers: [invalidResult] }))
-    assert.strictEqual(resultIssue._tag, "InvalidReviverResult")
-    assert.deepStrictEqual(resultIssue.path, [
-      "representation",
-      "checks",
-      0,
-      "annotations",
-      "representation"
-    ])
-    if (resultIssue._tag === "InvalidReviverResult") {
-      assert.strictEqual(resultIssue.expected, "Filter")
-      assert.strictEqual(resultIssue.actual, Schema.String.ast)
-    }
+    assert.strictEqual(
+      errorFrom(() => SchemaRepresentation2.fromJson(filterJson(), { revivers: [invalidResult] })).message,
+      `Invalid reviver result for ${filterId}\n  at ["representation"]["checks"][0]["annotations"]["representation"]`
+    )
 
     const cause = new Error("boom")
     const throwing = {
@@ -300,11 +240,10 @@ describe("SchemaRepresentation2 JSON revival", () => {
         throw cause
       }
     }
-    const thrownIssue = issueFrom(() => SchemaRepresentation2.fromJson(filterJson(), { revivers: [throwing] }))
-    assert.strictEqual(thrownIssue._tag, "InvalidReviverResult")
-    if (thrownIssue._tag === "InvalidReviverResult") {
-      assert.strictEqual(thrownIssue.cause, cause)
-    }
+    assert.strictEqual(
+      errorFrom(() => SchemaRepresentation2.fromJson(filterJson(), { revivers: [throwing] })),
+      cause
+    )
   })
 
   it("falls back to group children only when the group has no identity", () => {
@@ -351,16 +290,15 @@ describe("SchemaRepresentation2 JSON revival", () => {
     assert.isTrue(Schema.decodeUnknownResult(noServices(revived))("blocked")._tag === "Failure")
 
     const wrongKind = { ...minLengthReviver, id: groupId }
-    const issue = issueFrom(() => SchemaRepresentation2.fromJson(authoritativeJson, { revivers: [wrongKind] }))
-    assert.strictEqual(issue._tag, "InvalidReviverKind")
-    if (issue._tag === "InvalidReviverKind") {
-      assert.strictEqual(issue.expected, "FilterGroup")
-    }
+    assert.strictEqual(
+      errorFrom(() => SchemaRepresentation2.fromJson(authoritativeJson, { revivers: [wrongKind] })).message,
+      `Invalid reviver kind for ${groupId}\n  at ["representation"]["checks"][0]["annotations"]["representation"]`
+    )
   })
 
   it("requires persistence identities on declarations and leaf checks", () => {
-    assert.deepStrictEqual(
-      issueFrom(() =>
+    assert.strictEqual(
+      errorFrom(() =>
         SchemaRepresentation2.fromJson(
           {
             representation: {
@@ -371,15 +309,12 @@ describe("SchemaRepresentation2 JSON revival", () => {
           },
           { revivers: [] }
         )
-      ),
-      {
-        _tag: "MissingRepresentation",
-        path: ["representation", "checks", 0, "annotations", "representation"]
-      }
+      ).message,
+      `Missing representation annotation\n  at ["representation"]["checks"][0]["annotations"]["representation"]`
     )
 
-    assert.deepStrictEqual(
-      issueFrom(() =>
+    assert.strictEqual(
+      errorFrom(() =>
         SchemaRepresentation2.fromJson(
           {
             representation: {
@@ -391,11 +326,8 @@ describe("SchemaRepresentation2 JSON revival", () => {
           },
           { revivers: [] }
         )
-      ),
-      {
-        _tag: "MissingRepresentation",
-        path: ["representation", "annotations", "representation"]
-      }
+      ).message,
+      `Missing representation annotation\n  at ["representation"]["annotations"]["representation"]`
     )
   })
 
@@ -477,42 +409,42 @@ describe("SchemaRepresentation2 JSON revival", () => {
   })
 
   it("reports invalid references and distinguishes payload strict-JSON failures", () => {
-    assert.deepStrictEqual(
-      issueFrom(() =>
+    assert.strictEqual(
+      errorFrom(() =>
         SchemaRepresentation2.fromJson(
           { representation: { _tag: "Reference", $ref: "Missing" }, references: {} },
           { revivers: [] }
         )
-      ),
-      {
-        _tag: "InvalidReference",
-        path: ["representation", "$ref"],
-        $ref: "Missing"
-      }
+      ).message,
+      `Invalid reference Missing\n  at ["representation"]["$ref"]`
     )
 
     const invalidPayload = filterJson() as any
     invalidPayload.representation.checks[0].annotations.representation.payload = { value: -0 }
-    const payloadIssue = issueFrom(() =>
-      SchemaRepresentation2.fromJson(invalidPayload, { revivers: [minLengthReviver] })
+    const payloadCodecResult = Schema.decodeUnknownResult(SchemaRepresentation2.PersistedDocumentFromJson)(
+      invalidPayload
     )
-    assert.strictEqual(payloadIssue._tag, "InvalidRepresentationPayload")
-    assert.deepStrictEqual(payloadIssue.path, [
-      "representation",
-      "checks",
-      0,
-      "annotations",
-      "representation",
-      "payload",
-      "value"
-    ])
+    assert.strictEqual(payloadCodecResult._tag, "Failure")
+    if (payloadCodecResult._tag === "Failure") {
+      assert.strictEqual(
+        errorFrom(() => SchemaRepresentation2.fromJson(invalidPayload, { revivers: [minLengthReviver] })).message,
+        payloadCodecResult.failure.message
+      )
+    }
 
     const invalidDocument: any = {
       representation: { _tag: "String", annotations: { value: -0 }, checks: [] },
       references: {}
     }
-    const documentIssue = issueFrom(() => SchemaRepresentation2.fromJson(invalidDocument, { revivers: [] }))
-    assert.strictEqual(documentIssue._tag, "InvalidDocument")
-    assert.deepStrictEqual(documentIssue.path, ["representation", "annotations", "value"])
+    const documentCodecResult = Schema.decodeUnknownResult(SchemaRepresentation2.PersistedDocumentFromJson)(
+      invalidDocument
+    )
+    assert.strictEqual(documentCodecResult._tag, "Failure")
+    if (documentCodecResult._tag === "Failure") {
+      assert.strictEqual(
+        errorFrom(() => SchemaRepresentation2.fromJson(invalidDocument, { revivers: [] })).message,
+        documentCodecResult.failure.message
+      )
+    }
   })
 })

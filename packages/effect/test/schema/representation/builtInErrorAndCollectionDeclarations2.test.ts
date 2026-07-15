@@ -250,19 +250,7 @@ describe("SchemaRepresentation2 built-in Error and collection declarations", () 
       json.representation.annotations.representation.payload = payload
       throws(
         () => SchemaRepresentation2.fromJson(json, { revivers: [Schema.ErrorReviver] }),
-        (error: unknown) => {
-          assert.isTrue(error instanceof SchemaRepresentation2.SchemaRepresentationError)
-          if (error instanceof SchemaRepresentation2.SchemaRepresentationError) {
-            assert.strictEqual(error.issue._tag, "InvalidRepresentationPayload")
-            assert.deepStrictEqual(error.issue.path, [
-              "representation",
-              "annotations",
-              "representation",
-              "payload"
-            ])
-          }
-          return undefined
-        }
+        `Invalid representation payload for ${Schema.ErrorReviver.id}\n  at ["representation"]["annotations"]["representation"]["payload"]`
       )
     }
 
@@ -272,14 +260,7 @@ describe("SchemaRepresentation2 built-in Error and collection declarations", () 
     mapJson.representation.typeParameters.pop()
     throws(
       () => SchemaRepresentation2.fromJson(mapJson, { revivers: [Schema.ReadonlyMapReviver] }),
-      (error: unknown) => {
-        assert.isTrue(error instanceof SchemaRepresentation2.SchemaRepresentationError)
-        if (error instanceof SchemaRepresentation2.SchemaRepresentationError) {
-          assert.strictEqual(error.issue._tag, "InvalidTypeParametersArity")
-          assert.deepStrictEqual(error.issue.path, ["representation", "typeParameters"])
-        }
-        return undefined
-      }
+      `Invalid type parameters arity for ${Schema.ReadonlyMapReviver.id}: expected ${Schema.ReadonlyMapReviver.typeParametersArity}, got ${mapJson.representation.typeParameters.length}\n  at ["representation"]["typeParameters"]`
     )
   })
 })

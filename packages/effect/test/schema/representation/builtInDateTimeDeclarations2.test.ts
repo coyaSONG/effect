@@ -188,19 +188,7 @@ describe("SchemaRepresentation2 built-in DateTime declarations", () => {
       json.representation.annotations.representation.payload = {}
       throws(
         () => SchemaRepresentation2.fromJson(json, { revivers: [entry.reviver] }),
-        (error: unknown) => {
-          assert.isTrue(error instanceof SchemaRepresentation2.SchemaRepresentationError)
-          if (error instanceof SchemaRepresentation2.SchemaRepresentationError) {
-            assert.strictEqual(error.issue._tag, "InvalidRepresentationPayload")
-            assert.deepStrictEqual(error.issue.path, [
-              "representation",
-              "annotations",
-              "representation",
-              "payload"
-            ])
-          }
-          return undefined
-        }
+        `Invalid representation payload for ${entry.reviver.id}\n  at ["representation"]["annotations"]["representation"]["payload"]`
       )
     }
 
@@ -210,14 +198,7 @@ describe("SchemaRepresentation2 built-in DateTime declarations", () => {
     json.representation.typeParameters.push({ _tag: "String", checks: [] })
     throws(
       () => SchemaRepresentation2.fromJson(json, { revivers: [Schema.DateTimeZonedReviver] }),
-      (error: unknown) => {
-        assert.isTrue(error instanceof SchemaRepresentation2.SchemaRepresentationError)
-        if (error instanceof SchemaRepresentation2.SchemaRepresentationError) {
-          assert.strictEqual(error.issue._tag, "InvalidTypeParametersArity")
-          assert.deepStrictEqual(error.issue.path, ["representation", "typeParameters"])
-        }
-        return undefined
-      }
+      `Invalid type parameters arity for ${Schema.DateTimeZonedReviver.id}: expected ${Schema.DateTimeZonedReviver.typeParametersArity}, got ${json.representation.typeParameters.length}\n  at ["representation"]["typeParameters"]`
     )
   })
 })

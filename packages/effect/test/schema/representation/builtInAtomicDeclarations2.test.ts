@@ -275,19 +275,7 @@ describe("SchemaRepresentation2 built-in atomic declarations", () => {
     json.representation.annotations.representation.payload = {}
     throws(
       () => SchemaRepresentation2.fromJson(json, { revivers: [Schema.DateReviver] }),
-      (error: unknown) => {
-        assert.isTrue(error instanceof SchemaRepresentation2.SchemaRepresentationError)
-        if (error instanceof SchemaRepresentation2.SchemaRepresentationError) {
-          assert.strictEqual(error.issue._tag, "InvalidRepresentationPayload")
-          assert.deepStrictEqual(error.issue.path, [
-            "representation",
-            "annotations",
-            "representation",
-            "payload"
-          ])
-        }
-        return undefined
-      }
+      `Invalid representation payload for ${Schema.DateReviver.id}\n  at ["representation"]["annotations"]["representation"]["payload"]`
     )
   })
 })

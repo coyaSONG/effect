@@ -40,7 +40,6 @@ import * as InternalArbitrary from "./internal/schema/arbitrary.ts"
 import * as InternalEquivalence from "./internal/schema/equivalence.ts"
 import * as InternalStandard from "./internal/schema/representation.ts"
 import * as InternalRepresentation2 from "./internal/schema/representation2.ts"
-import { SchemaRepresentationError as SchemaRepresentationError2 } from "./internal/schema/representation2Error.ts"
 import * as InternalSchema from "./internal/schema/schema.ts"
 import * as JsonPatch from "./JsonPatch.ts"
 import * as JsonSchema from "./JsonSchema.ts"
@@ -15769,13 +15768,6 @@ export function toRepresentation(schema: Constraint): SchemaRepresentation.Docum
   return InternalStandard.fromAST(schema.ast)
 }
 
-function unwrapRepresentation2<A>(result: InternalRepresentation2.ProjectionResult<A>): A {
-  if (result._tag === "Failure") {
-    throw new SchemaRepresentationError2(result.issue)
-  }
-  return result.value
-}
-
 /**
  * Derives a live v2 representation document from the type side of a schema.
  *
@@ -15925,8 +15917,8 @@ export function toJsonSchemaDocument2(
   schema: Constraint,
   options?: ToJsonSchemaOptions
 ): JsonSchema.Document<"draft-2020-12"> {
-  const document = InternalRepresentation2.fromAST(SchemaAST.toEncoded(schema.ast))
-  return unwrapRepresentation2(InternalRepresentation2.toJsonSchemaDocument(document, options))
+  const document = InternalRepresentation2.fromEncodedAST(schema.ast)
+  return InternalRepresentation2.toJsonSchemaDocument(document, options)
 }
 
 // -----------------------------------------------------------------------------

@@ -1,5 +1,5 @@
 import { assert, describe, it } from "@effect/vitest"
-import { Schema, SchemaRepresentation2 } from "effect"
+import { Schema } from "effect"
 import { throws } from "../../utils/assert.ts"
 
 describe("Schema JSON Schema v2 consumer", () => {
@@ -79,7 +79,7 @@ describe("Schema JSON Schema v2 consumer", () => {
     })
   })
 
-  it("throws the shared SchemaRepresentationError for compiler failures", () => {
+  it("reports compiler failures with their representation path", () => {
     const schema = Schema.declare((input): input is string => typeof input === "string", {
       representation: {
         id: "test/schema/opaqueString",
@@ -89,14 +89,7 @@ describe("Schema JSON Schema v2 consumer", () => {
 
     throws(
       () => Schema.toJsonSchemaDocument2(schema),
-      (error: unknown) => {
-        assert.isTrue(error instanceof SchemaRepresentation2.SchemaRepresentationError)
-        if (error instanceof SchemaRepresentation2.SchemaRepresentationError) {
-          assert.strictEqual(error.issue._tag, "MissingJsonSchema")
-          assert.deepStrictEqual(error.issue.path, ["representation", "annotations", "toJsonSchema"])
-        }
-        return undefined
-      }
+      `Missing JSON Schema callback\n  at ["representation"]["annotations"]["toJsonSchema"]`
     )
   })
 })

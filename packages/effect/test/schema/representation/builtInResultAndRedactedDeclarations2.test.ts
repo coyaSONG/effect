@@ -261,19 +261,7 @@ describe("SchemaRepresentation2 built-in Result and Redacted declarations", () =
       json.representation.annotations.representation.payload = payload
       throws(
         () => SchemaRepresentation2.fromJson(json, { revivers: [Schema.RedactedReviver] }),
-        (error: unknown) => {
-          assert.isTrue(error instanceof SchemaRepresentation2.SchemaRepresentationError)
-          if (error instanceof SchemaRepresentation2.SchemaRepresentationError) {
-            assert.strictEqual(error.issue._tag, "InvalidRepresentationPayload")
-            assert.deepStrictEqual(error.issue.path, [
-              "representation",
-              "annotations",
-              "representation",
-              "payload"
-            ])
-          }
-          return undefined
-        }
+        `Invalid representation payload for ${Schema.RedactedReviver.id}\n  at ["representation"]["annotations"]["representation"]["payload"]`
       )
     }
 
@@ -295,14 +283,7 @@ describe("SchemaRepresentation2 built-in Result and Redacted declarations", () =
       entry.json.representation.typeParameters.pop()
       throws(
         () => SchemaRepresentation2.fromJson(entry.json, { revivers: [entry.reviver] }),
-        (error: unknown) => {
-          assert.isTrue(error instanceof SchemaRepresentation2.SchemaRepresentationError)
-          if (error instanceof SchemaRepresentation2.SchemaRepresentationError) {
-            assert.strictEqual(error.issue._tag, "InvalidTypeParametersArity")
-            assert.deepStrictEqual(error.issue.path, ["representation", "typeParameters"])
-          }
-          return undefined
-        }
+        `Invalid type parameters arity for ${entry.reviver.id}: expected ${entry.reviver.typeParametersArity}, got ${entry.json.representation.typeParameters.length}\n  at ["representation"]["typeParameters"]`
       )
     }
   })

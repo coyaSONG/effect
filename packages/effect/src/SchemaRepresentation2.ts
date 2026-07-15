@@ -4,7 +4,6 @@
  * @since 4.0.0
  */
 import * as InternalRepresentation from "./internal/schema/representation2.ts"
-import { SchemaRepresentationError } from "./internal/schema/representation2Error.ts"
 import * as InternalRepresentationSchema from "./internal/schema/representation2Schema.ts"
 import type * as JsonSchema from "./JsonSchema.ts"
 import type * as Schema from "./Schema.ts"
@@ -672,107 +671,13 @@ export interface FromJsonOptions {
  *
  * **Gotchas**
  *
- * `onEnter` must return a plain strict-JSON object. Invalid results and thrown exceptions are reported through {@link SchemaRepresentationError}.
+ * `onEnter` must return a plain strict-JSON object. Invalid results throw an `Error`; exceptions raised by the callback pass through unchanged.
  *
  * @category models
  * @since 4.0.0
  */
 export interface FromJsonSchemaOptions {
   readonly onEnter?: ((schema: JsonSchema.JsonSchema) => JsonSchema.JsonSchema) | undefined
-}
-
-/**
- * A path in a representation document.
- *
- * @category errors
- * @since 4.0.0
- */
-export type Path = ReadonlyArray<string | number>
-
-/**
- * A structured schema representation error.
- *
- * @category errors
- * @since 4.0.0
- */
-export type SchemaRepresentationIssue =
-  | { readonly _tag: "InvalidDocument"; readonly path: Path; readonly cause?: unknown }
-  | { readonly _tag: "InvalidStructuralValue"; readonly path: Path; readonly actual: unknown }
-  | { readonly _tag: "MissingRepresentation"; readonly path: Path }
-  | {
-    readonly _tag: "InvalidRepresentationPayload"
-    readonly path: Path
-    readonly id?: string | undefined
-    readonly cause?: unknown
-  }
-  | { readonly _tag: "MissingReviver"; readonly path: Path; readonly id: string }
-  | {
-    readonly _tag: "DuplicateReviver"
-    readonly path: Path
-    readonly id: string
-    readonly firstIndex: number
-    readonly duplicateIndex: number
-  }
-  | {
-    readonly _tag: "InvalidReviverArity"
-    readonly path: Path
-    readonly id: string
-    readonly field: "schemasArity" | "typeParametersArity"
-    readonly actual: unknown
-  }
-  | {
-    readonly _tag: "InvalidSchemasArity"
-    readonly path: Path
-    readonly id: string
-    readonly expected: number
-    readonly actual: number
-  }
-  | {
-    readonly _tag: "InvalidTypeParametersArity"
-    readonly path: Path
-    readonly id: string
-    readonly expected: number
-    readonly actual: number
-  }
-  | {
-    readonly _tag: "InvalidReviverKind"
-    readonly path: Path
-    readonly id: string
-    readonly expected: "Declaration" | "Filter" | "FilterGroup"
-    readonly actual: unknown
-  }
-  | {
-    readonly _tag: "InvalidReviverResult"
-    readonly path: Path
-    readonly id: string
-    readonly expected: "Schema" | "Filter" | "FilterGroup"
-    readonly actual?: unknown
-    readonly cause?: unknown
-  }
-  | {
-    readonly _tag: "InvalidJsonSchemaResult"
-    readonly path: Path
-    readonly actual?: unknown
-    readonly cause?: unknown
-  }
-  | { readonly _tag: "MissingJsonSchema"; readonly path: Path }
-  | { readonly _tag: "MissingGeneration"; readonly path: Path }
-  | {
-    readonly _tag: "InvalidGenerationResult"
-    readonly path: Path
-    readonly actual?: unknown
-    readonly cause?: unknown
-  }
-  | { readonly _tag: "InvalidReference"; readonly path: Path; readonly $ref: string }
-
-export {
-  /**
-   * Error thrown by high-level representation APIs.
-   *
-   * @category errors
-   * @since 4.0.0
-   */
-  SchemaRepresentationError
 }
 
 /**
@@ -857,7 +762,7 @@ export function fromASTs(
  *
  * **Gotchas**
  *
- * Check compilation is best-effort, but opaque declarations require a `toJsonSchema` callback. Invalid callback results throw {@link SchemaRepresentationError}.
+ * Check compilation is best-effort, but opaque declarations require a `toJsonSchema` callback. Invalid callback results throw an `Error`; exceptions raised by the callback pass through unchanged.
  *
  * @see {@link toJsonSchemaMultiDocument} for multiple roots sharing definitions
  *
@@ -868,7 +773,7 @@ export function toJsonSchemaDocument(
   document: Document<LiveAnnotations>,
   options?: Schema.ToJsonSchemaOptions
 ): JsonSchema.Document<"draft-2020-12"> {
-  return unwrapProjection(InternalRepresentation.toJsonSchemaDocument(document, options))
+  return InternalRepresentation.toJsonSchemaDocument(document, options)
 }
 
 /**
@@ -891,7 +796,7 @@ export function toJsonSchemaMultiDocument(
   document: MultiDocument<LiveAnnotations>,
   options?: Schema.ToJsonSchemaOptions
 ): JsonSchema.MultiDocument<"draft-2020-12"> {
-  return unwrapProjection(InternalRepresentation.toJsonSchemaMultiDocument(document, options))
+  return InternalRepresentation.toJsonSchemaMultiDocument(document, options)
 }
 
 /**
@@ -903,13 +808,13 @@ export function toJsonSchemaMultiDocument(
  *
  * **Gotchas**
  *
- * Opaque declarations and leaf checks require generation callbacks. Invalid callbacks throw {@link SchemaRepresentationError}.
+ * Opaque declarations and leaf checks require generation callbacks. Invalid callback results throw an `Error`; exceptions raised by a callback pass through unchanged.
  *
  * @category transforming
  * @since 4.0.0
  */
 export function toCodeDocument(document: MultiDocument<LiveAnnotations>): CodeDocument {
-  return unwrapProjection(InternalRepresentation.toCodeDocument(document))
+  return InternalRepresentation.toCodeDocument(document)
 }
 
 /**
@@ -929,7 +834,7 @@ export function toCodeDocument(document: MultiDocument<LiveAnnotations>): CodeDo
  * @since 4.0.0
  */
 export function toCodeDocumentFromSchemaMultiDocument(document: SchemaMultiDocument): CodeDocument {
-  return unwrapProjection(InternalRepresentation.toCodeDocumentFromSchemaMultiDocument(document))
+  return InternalRepresentation.toCodeDocumentFromSchemaMultiDocument(document)
 }
 
 /**
@@ -972,13 +877,6 @@ export const PersistedDocumentFromJson: Schema.Codec<Document<PersistedAnnotatio
 export const PersistedMultiDocumentFromJson: Schema.Codec<MultiDocument<PersistedAnnotations>, Schema.Json> =
   InternalRepresentationSchema.getPersistedMultiDocumentFromJson()
 
-function unwrapProjection<A>(result: InternalRepresentation.ProjectionResult<A>): A {
-  if (result._tag === "Failure") {
-    throw new SchemaRepresentationError(result.issue)
-  }
-  return result.value
-}
-
 /**
  * Projects a live single-root representation document and encodes it as strict JSON.
  *
@@ -988,7 +886,7 @@ function unwrapProjection<A>(result: InternalRepresentation.ProjectionResult<A>)
  *
  * **Gotchas**
  *
- * Generic annotations that are not strict JSON are omitted. Invalid persistence identities and unsupported structural values fail with `SchemaRepresentationError`.
+ * Generic annotations that are not strict JSON are omitted. Invalid persistence identities and unsupported structural values throw an `Error` containing their representation path.
  *
  * @see {@link fromAST} for constructing the live document
  * @see {@link PersistedDocumentFromJson} for direct access to the persisted codec
@@ -998,7 +896,7 @@ function unwrapProjection<A>(result: InternalRepresentation.ProjectionResult<A>)
  * @since 4.0.0
  */
 export function toJson(document: Document<LiveAnnotations>): Schema.Json {
-  return unwrapProjection(InternalRepresentationSchema.toJson(document))
+  return InternalRepresentationSchema.toJson(document)
 }
 
 /**
@@ -1020,7 +918,7 @@ export function toJson(document: Document<LiveAnnotations>): Schema.Json {
  * @since 4.0.0
  */
 export function toJsonMultiDocument(document: MultiDocument<LiveAnnotations>): Schema.Json {
-  return unwrapProjection(InternalRepresentationSchema.toJsonMultiDocument(document))
+  return InternalRepresentationSchema.toJsonMultiDocument(document)
 }
 
 /**
@@ -1032,7 +930,7 @@ export function toJsonMultiDocument(document: MultiDocument<LiveAnnotations>): S
  *
  * **Gotchas**
  *
- * `options` is required even when `revivers` is empty. Invalid documents and reviver failures throw {@link SchemaRepresentationError}.
+ * `options` is required even when `revivers` is empty. Invalid documents throw a schema decoding error. Invalid reviver results throw an `Error`; exceptions raised by a reviver pass through unchanged.
  *
  * @see {@link toJson} for producing the persisted document
  * @see {@link fromJsonMultiDocument} for multiple roots sharing references
@@ -1041,7 +939,7 @@ export function toJsonMultiDocument(document: MultiDocument<LiveAnnotations>): S
  * @since 4.0.0
  */
 export function fromJson(input: unknown, options: FromJsonOptions): Schema.Top {
-  return unwrapProjection(InternalRepresentationSchema.fromJson(input, options.revivers))
+  return InternalRepresentationSchema.fromJson(input, options.revivers)
 }
 
 /**
@@ -1062,7 +960,7 @@ export function fromJson(input: unknown, options: FromJsonOptions): Schema.Top {
  * @since 4.0.0
  */
 export function fromJsonMultiDocument(input: unknown, options: FromJsonOptions): SchemaMultiDocument {
-  return unwrapProjection(InternalRepresentationSchema.fromJsonMultiDocument(input, options.revivers))
+  return InternalRepresentationSchema.fromJsonMultiDocument(input, options.revivers)
 }
 
 /**
@@ -1074,7 +972,7 @@ export function fromJsonMultiDocument(input: unknown, options: FromJsonOptions):
  *
  * **Gotchas**
  *
- * Import is best-effort. The result contains persisted identities but no revived runtime callbacks. Invalid documents and callbacks throw {@link SchemaRepresentationError}.
+ * Import is best-effort. The result contains persisted identities but no revived runtime callbacks. Invalid documents and callback results throw an `Error`; exceptions raised by a callback pass through unchanged.
  *
  * @see {@link fromJsonSchemaMultiDocument} for multiple roots sharing definitions
  * @see {@link toSchemaFromJsonSchemaDocument} for importing directly as a runtime schema
@@ -1086,7 +984,7 @@ export function fromJsonSchemaDocument(
   document: JsonSchema.Document<"draft-2020-12">,
   options?: FromJsonSchemaOptions
 ): Document<PersistedAnnotations> {
-  return unwrapProjection(InternalRepresentation.fromJsonSchemaDocument(document, options))
+  return InternalRepresentation.fromJsonSchemaDocument(document, options)
 }
 
 /**
@@ -1098,7 +996,7 @@ export function fromJsonSchemaDocument(
  *
  * **Gotchas**
  *
- * Every definition is translated, including definitions that no root references. Invalid documents and callbacks throw {@link SchemaRepresentationError}.
+ * Every definition is translated, including definitions that no root references. Invalid documents and callback results throw an `Error`; exceptions raised by a callback pass through unchanged.
  *
  * @see {@link fromJsonSchemaDocument} for a single root
  * @see {@link toSchemaFromJsonSchemaMultiDocument} for importing directly as runtime schemas
@@ -1110,7 +1008,7 @@ export function fromJsonSchemaMultiDocument(
   document: JsonSchema.MultiDocument<"draft-2020-12">,
   options?: FromJsonSchemaOptions
 ): MultiDocument<PersistedAnnotations> {
-  return unwrapProjection(InternalRepresentation.fromJsonSchemaMultiDocument(document, options))
+  return InternalRepresentation.fromJsonSchemaMultiDocument(document, options)
 }
 
 /**
@@ -1122,7 +1020,7 @@ export function fromJsonSchemaMultiDocument(
  *
  * **Gotchas**
  *
- * Import is best-effort. Built-in checks are revived with an importer-private resolver, while invalid documents and callbacks throw {@link SchemaRepresentationError}.
+ * Import is best-effort. Built-in checks are revived with an importer-private resolver. Invalid documents and callback results throw an `Error`; exceptions raised by a callback pass through unchanged.
  *
  * @see {@link fromJsonSchemaDocument} for translating without runtime revival
  * @see {@link toSchemaFromJsonSchemaMultiDocument} for multiple roots sharing definitions
@@ -1134,7 +1032,7 @@ export function toSchemaFromJsonSchemaDocument(
   document: JsonSchema.Document<"draft-2020-12">,
   options?: FromJsonSchemaOptions
 ): Schema.Top {
-  return unwrapProjection(InternalRepresentationSchema.toSchemaFromJsonSchemaDocument(document, options))
+  return InternalRepresentationSchema.toSchemaFromJsonSchemaDocument(document, options)
 }
 
 /**
@@ -1146,7 +1044,7 @@ export function toSchemaFromJsonSchemaDocument(
  *
  * **Gotchas**
  *
- * Every definition is revived, including definitions that no root references. Invalid documents and callbacks throw {@link SchemaRepresentationError}.
+ * Every definition is revived, including definitions that no root references. Invalid documents and callback results throw an `Error`; exceptions raised by a callback pass through unchanged.
  *
  * @see {@link fromJsonSchemaMultiDocument} for translating without runtime revival
  * @see {@link toSchemaFromJsonSchemaDocument} for a single root
@@ -1159,5 +1057,5 @@ export function toSchemaFromJsonSchemaMultiDocument(
   document: JsonSchema.MultiDocument<"draft-2020-12">,
   options?: FromJsonSchemaOptions
 ): SchemaMultiDocument {
-  return unwrapProjection(InternalRepresentationSchema.toSchemaFromJsonSchemaMultiDocument(document, options))
+  return InternalRepresentationSchema.toSchemaFromJsonSchemaMultiDocument(document, options)
 }

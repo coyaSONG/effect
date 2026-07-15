@@ -385,21 +385,7 @@ describe("SchemaRepresentation2 built-in string checks", () => {
       entry.update(json.representation.checks[0].annotations.representation.payload)
       throws(
         () => SchemaRepresentation2.fromJson(json, { revivers: [entry.reviver] }),
-        (error: unknown) => {
-          assert.isTrue(error instanceof SchemaRepresentation2.SchemaRepresentationError)
-          if (error instanceof SchemaRepresentation2.SchemaRepresentationError) {
-            assert.strictEqual(error.issue._tag, "InvalidRepresentationPayload")
-            assert.deepStrictEqual(error.issue.path, [
-              "representation",
-              "checks",
-              0,
-              "annotations",
-              "representation",
-              "payload"
-            ])
-          }
-          return undefined
-        }
+        `Invalid representation payload for ${entry.reviver.id}\n  at ["representation"]["checks"][0]["annotations"]["representation"]["payload"]`
       )
     }
   })

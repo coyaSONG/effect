@@ -62,21 +62,7 @@ describe("SchemaRepresentation2 shadow built-ins", () => {
       json.representation.checks[0].annotations.representation.payload = payload
       throws(
         () => SchemaRepresentation2.fromJson(json, { revivers: [Schema.isPatternReviver] }),
-        (error: unknown) => {
-          assert.isTrue(error instanceof SchemaRepresentation2.SchemaRepresentationError)
-          if (error instanceof SchemaRepresentation2.SchemaRepresentationError) {
-            assert.strictEqual(error.issue._tag, "InvalidRepresentationPayload")
-            assert.deepStrictEqual(error.issue.path, [
-              "representation",
-              "checks",
-              0,
-              "annotations",
-              "representation",
-              "payload"
-            ])
-          }
-          return undefined
-        }
+        `Invalid representation payload for ${Schema.isPatternReviver.id}\n  at ["representation"]["checks"][0]["annotations"]["representation"]["payload"]`
       )
     }
   })

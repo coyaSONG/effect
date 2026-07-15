@@ -206,21 +206,7 @@ describe("SchemaRepresentation2 built-in object checks", () => {
     countJson.representation.checks[0].annotations.representation.payload.minProperties = 1.5
     throws(
       () => SchemaRepresentation2.fromJson(countJson, { revivers: [Schema.isMinPropertiesReviver] }),
-      (error: unknown) => {
-        assert.isTrue(error instanceof SchemaRepresentation2.SchemaRepresentationError)
-        if (error instanceof SchemaRepresentation2.SchemaRepresentationError) {
-          assert.strictEqual(error.issue._tag, "InvalidRepresentationPayload")
-          assert.deepStrictEqual(error.issue.path, [
-            "representation",
-            "checks",
-            0,
-            "annotations",
-            "representation",
-            "payload"
-          ])
-        }
-        return undefined
-      }
+      `Invalid representation payload for ${Schema.isMinPropertiesReviver.id}\n  at ["representation"]["checks"][0]["annotations"]["representation"]["payload"]`
     )
 
     const propertyNamesJson = SchemaRepresentation2.toJson(
@@ -229,21 +215,7 @@ describe("SchemaRepresentation2 built-in object checks", () => {
     delete propertyNamesJson.representation.checks[0].annotations.representation.schemas
     throws(
       () => SchemaRepresentation2.fromJson(propertyNamesJson, { revivers: [Schema.isPropertyNamesReviver] }),
-      (error: unknown) => {
-        assert.isTrue(error instanceof SchemaRepresentation2.SchemaRepresentationError)
-        if (error instanceof SchemaRepresentation2.SchemaRepresentationError) {
-          assert.strictEqual(error.issue._tag, "InvalidSchemasArity")
-          assert.deepStrictEqual(error.issue.path, [
-            "representation",
-            "checks",
-            0,
-            "annotations",
-            "representation",
-            "schemas"
-          ])
-        }
-        return undefined
-      }
+      `Invalid schemas arity for ${Schema.isPropertyNamesReviver.id}: expected ${Schema.isPropertyNamesReviver.schemasArity}, got 0\n  at ["representation"]["checks"][0]["annotations"]["representation"]["schemas"]`
     )
   })
 })

@@ -101,21 +101,7 @@ function noServices(schema: Schema.Top): Schema.Codec<unknown> {
 function expectInvalidPayload(json: unknown, reviver: SchemaRepresentation2.AnyReviver): void {
   throws(
     () => SchemaRepresentation2.fromJson(json, { revivers: [reviver] }),
-    (error: unknown) => {
-      assert.isTrue(error instanceof SchemaRepresentation2.SchemaRepresentationError)
-      if (error instanceof SchemaRepresentation2.SchemaRepresentationError) {
-        assert.strictEqual(error.issue._tag, "InvalidRepresentationPayload")
-        assert.deepStrictEqual(error.issue.path, [
-          "representation",
-          "checks",
-          0,
-          "annotations",
-          "representation",
-          "payload"
-        ])
-      }
-      return undefined
-    }
+    `Invalid representation payload for ${reviver.id}\n  at ["representation"]["checks"][0]["annotations"]["representation"]["payload"]`
   )
 }
 
@@ -233,21 +219,7 @@ describe("SchemaRepresentation2 built-in Date checks", () => {
     })
     throws(
       () => SchemaRepresentation2.toJson(SchemaRepresentation2.fromAST(Schema.Any.check(check).ast)),
-      (error: unknown) => {
-        assert.isTrue(error instanceof SchemaRepresentation2.SchemaRepresentationError)
-        if (error instanceof SchemaRepresentation2.SchemaRepresentationError) {
-          assert.strictEqual(error.issue._tag, "InvalidRepresentationPayload")
-          assert.deepStrictEqual(error.issue.path, [
-            "representation",
-            "checks",
-            0,
-            "annotations",
-            "representation",
-            "payload"
-          ])
-        }
-        return undefined
-      }
+      `Invalid representation payload for effect/schema/isGreaterThanDate\n  at ["representation"]["checks"][0]["annotations"]["representation"]["payload"]`
     )
   })
 })
